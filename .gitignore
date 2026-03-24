@@ -1,0 +1,21 @@
+node_modules/
+# Environment files (root + any subfolder)
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+!.env.example
+!**/.env.example
+.dist/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.keras
+*.pkl
+*.joblib
+.DS_Store

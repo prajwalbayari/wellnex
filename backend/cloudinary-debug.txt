@@ -1,0 +1,4 @@
+{
+  "api_key": "MISSING",
+  "api_secret": "MISSING"
+}

@@ -1,0 +1,13 @@
+[2026-02-27T16:22:55.050Z] Uploading to Cloudinary... cloud_name=dbxs8bxfa, bufLen=10715
+[2026-02-27T16:22:55.062Z] Cloudinary FAILED: Must supply api_key
+Error: Must supply api_key
+    at ensureOption (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\utils\ensureOption.js:19:13)
+    at Object.sign_request (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\utils\index.js:1154:16)
+    at Object.process_request_params (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\utils\index.js:1206:22)
+    at call_api (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\uploader.js:488:18)
+    at Object.upload (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\uploader.js:55:10)
+    at Object.upload_stream (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\uploader.js:42:18)
+    at Object.upload_stream (C:\Users\Prajwal\Desktop\Wellnex\WellnexWeb\backend\node_modules\cloudinary\lib\utils\index.js:1405:21)
+    at file:///C:/Users/Prajwal/Desktop/Wellnex/WellnexWeb/backend/config/cloudinary.js:20:40
+    at new Promise (<anonymous>)
+    at uploadToCloudinary (file:///C:/Users/Prajwal/Desktop/Wellnex/WellnexWeb/backend/config/cloudinary.js:19:10)
