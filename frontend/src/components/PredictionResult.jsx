@@ -10,10 +10,7 @@ const PredictionResult = ({ result }) => {
     result.predictionResult || result.summary?.overall_prediction || "No prediction";
   const confidence = Number(result.probability ?? result.summary?.confidence ?? 0);
   const diseaseType = result.diseaseType || result.summary?.likely_disease || "unknown";
-  const isPositive =
-    predictionText.toLowerCase().includes("positive") ||
-    predictionText.toLowerCase().includes("most likely") ||
-    confidence >= 0.5;
+  const isPositive = confidence > 0.7;
 
   const modelRows = result.modelResults
     ? Object.entries(result.modelResults)
@@ -34,7 +31,7 @@ const PredictionResult = ({ result }) => {
           <FiCheckCircle className="w-8 h-8 text-green-500" />
         )}
         <h3 className="text-xl font-bold">
-          {isPositive ? "Risk Detected" : "No Risk Detected"}
+          {isPositive ? "Positive" : "Negative"}
         </h3>
       </div>
 
@@ -96,7 +93,7 @@ const PredictionResult = ({ result }) => {
       )}
 
       <p className="mt-4 text-xs text-gray-400">
-        ⚠️ This is an AI prediction and not a medical diagnosis. Please consult
+        ⚠️ This is a model-generated prediction and not a medical diagnosis. Please consult
         a healthcare professional.
       </p>
     </div>

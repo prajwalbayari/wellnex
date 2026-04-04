@@ -44,7 +44,7 @@ const Signup = () => {
         <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8">
           <h2 className="text-2xl font-bold text-center mb-1">Create Account</h2>
           <p className="text-center text-gray-500 text-sm mb-8">
-            Start predicting diseases with AI
+            Start using model-based disease risk prediction
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-5">

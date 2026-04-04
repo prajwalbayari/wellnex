@@ -46,7 +46,7 @@ const UniversalReportUpload = ({ loading, onSubmit }) => {
     <form onSubmit={handleSubmit} className="space-y-4">
       <p className="text-sm text-gray-500">
         Upload one report file (PDF, TXT, DOCX, CSV, JSON, image, or similar).
-        Wellnex will process it once and evaluate all 4 disease models.
+        Wellnex will process it once and evaluate diabetes, heart disease, and breast cancer models.
       </p>
 
       <div

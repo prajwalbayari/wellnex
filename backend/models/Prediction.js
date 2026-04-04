@@ -12,7 +12,7 @@ const predictionSchema = new mongoose.Schema(
     },
     diseaseType: {
       type: String,
-      enum: ["diabetes", "heart", "lung", "breast"],
+      enum: ["diabetes", "heart", "breast"],
       required: true,
     },
     inputData: {

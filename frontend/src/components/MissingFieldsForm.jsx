@@ -160,7 +160,7 @@ const MissingFieldsForm = ({ missingFields, prefillInputs, loading, onSubmit }) 
       <div>
         <h3 className="text-sm font-semibold text-amber-900">Additional Clinical Fields Needed</h3>
         <p className="text-xs text-amber-800 mt-1">
-          Some required values could not be extracted from the uploaded report. Fill these fields once and the same file will be re-evaluated across all 4 models.
+          Some required values could not be extracted from the uploaded report. Fill these fields once and the same file will be re-evaluated across diabetes, heart, and breast models.
         </p>
       </div>
 

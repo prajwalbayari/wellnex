@@ -27,8 +27,6 @@ const toggleFields = [
 const defaultState = {
   // number fields start empty
   ...Object.fromEntries(numberFields.map((f) => [f.name, ""])),
-  // education level (1-4)
-  education: "2",
   // toggles
   ...Object.fromEntries(toggleFields.map((f) => [f.name, 0])),
 };
@@ -47,7 +45,7 @@ const HeartForm = ({ onSubmit, loading }) => {
     const payload = {};
     for (const nf of numberFields)
       payload[nf.name] = parseFloat(form[nf.name]) || 0;
-    payload.education = parseInt(form.education, 10) || 2;
+    payload.education = 2; // default model value; education is not manually collected
     for (const tf of toggleFields) payload[tf.name] = form[tf.name];
     onSubmit(payload);
   };
@@ -95,24 +93,6 @@ const HeartForm = ({ onSubmit, loading }) => {
           Health Metrics
         </legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Education dropdown */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Education Level
-            </label>
-            <select
-              name="education"
-              value={form.education}
-              onChange={handleChange}
-              className={inputClass}
-            >
-              <option value="1">Some High School</option>
-              <option value="2">High School / GED</option>
-              <option value="3">Some College</option>
-              <option value="4">College Degree</option>
-            </select>
-          </div>
-
           {numberFields.map((nf) => (
             <div key={nf.name}>
               <label className="block text-xs font-medium text-gray-600 mb-1">

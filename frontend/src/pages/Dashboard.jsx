@@ -25,6 +25,7 @@ const Dashboard = () => {
 
   const [inputMode, setInputMode] = useState("upload");
   const [pendingFile, setPendingFile] = useState(null);
+  const [manualTextInputs, setManualTextInputs] = useState({ diabetes: "", heart: "" });
   const [missingFields, setMissingFields] = useState(null);
   const [prefillInputs, setPrefillInputs] = useState(null);
   const [result, setResult] = useState(null);
@@ -52,7 +53,18 @@ const Dashboard = () => {
     setResult(null);
 
     try {
-      const data = await predictUnified(file, supplementalData);
+      const hasManualDiabetesText = manualTextInputs.diabetes.trim().length > 0;
+      const hasManualHeartText = manualTextInputs.heart.trim().length > 0;
+
+      const mergedSupplementalData = {
+        ...supplementalData,
+        manual_text: {
+          diabetes: hasManualDiabetesText ? manualTextInputs.diabetes.trim() : "",
+          heart: hasManualHeartText ? manualTextInputs.heart.trim() : "",
+        },
+      };
+
+      const data = await predictUnified(file, mergedSupplementalData);
 
       setMissingFields(data.missing_fields || null);
       setPrefillInputs(data.prefill_inputs || null);
@@ -144,7 +156,7 @@ const Dashboard = () => {
         </h1>
         <p className="text-gray-500 text-sm mt-1">
           Upload one medical report and Wellnex will run a unified pipeline across
-          diabetes, heart disease, lung cancer, and breast cancer models.
+          diabetes, heart disease, and breast cancer models.
         </p>
       </div>
 
@@ -179,6 +191,44 @@ const Dashboard = () => {
 
         {inputMode === "upload" ? (
           <>
+            <div className="mb-5 grid grid-cols-1 lg:grid-cols-2 gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Optional Manual Diabetes Notes
+                </label>
+                <textarea
+                  value={manualTextInputs.diabetes}
+                  onChange={(event) =>
+                    setManualTextInputs((prev) => ({
+                      ...prev,
+                      diabetes: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                  placeholder="Example: age 46, gender male, bmi 28.4, fasting glucose 132, hba1c 6.8"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-400 focus:border-transparent outline-none transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Optional Manual Heart Disease Notes
+                </label>
+                <textarea
+                  value={manualTextInputs.heart}
+                  onChange={(event) =>
+                    setManualTextInputs((prev) => ({
+                      ...prev,
+                      heart: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                  placeholder="Example: age 55, male yes, smoker no, systolic bp 145, cholesterol 230, glucose 110"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-400 focus:border-transparent outline-none transition"
+                />
+              </div>
+            </div>
+
             <UniversalReportUpload loading={loading} onSubmit={handleInitialUpload} />
 
             <MissingFieldsForm

@@ -2,21 +2,19 @@
 // Landing Page
 // ─────────────────────────────────────────────────────────────
 import { Link } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import {
   FiHeart,
   FiDroplet,
-  FiWind,
   FiTarget,
   FiShield,
-  FiZap,
-  FiBarChart2,
 } from "react-icons/fi";
 
 const features = [
   {
     icon: FiDroplet,
     title: "Diabetes Prediction",
-    desc: "Analyse 29 key health metrics to assess diabetes risk using deep learning.",
+    desc: "Analyse 29 key health metrics to assess diabetes risk using trained predictive models.",
     color: "text-blue-600 bg-blue-50",
   },
   {
@@ -24,12 +22,6 @@ const features = [
     title: "Heart Disease",
     desc: "Predict cardiovascular risk from clinical parameters like BP, cholesterol and more.",
     color: "text-red-600 bg-red-50",
-  },
-  {
-    icon: FiWind,
-    title: "Lung Cancer Detection",
-    desc: "Upload CT scan images and let AI analyse them for early lung cancer detection.",
-    color: "text-teal-600 bg-teal-50",
   },
   {
     icon: FiTarget,
@@ -40,12 +32,12 @@ const features = [
 ];
 
 const stats = [
-  { icon: FiShield, value: "4", label: "Disease Models" },
-  { icon: FiZap, value: "<2s", label: "Prediction Time" },
-  { icon: FiBarChart2, value: "95%+", label: "Accuracy Target" },
+  { icon: FiShield, value: "3", label: "Active Disease Models" },
 ];
 
 const Landing = () => {
+  const { user } = useAuth();
+
   return (
     <div className="overflow-hidden">
       {/* ── Hero Section ──────────────────────────────────────── */}
@@ -53,30 +45,41 @@ const Landing = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 lg:py-32">
           <div className="max-w-3xl">
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-tight">
-              AI-Powered
+              Data-Driven
               <br />
               <span className="text-primary-200">Multi-Disease</span>
               <br />
               Prediction Platform
             </h1>
             <p className="mt-6 text-lg text-primary-100 max-w-xl">
-              Wellnex leverages state-of-the-art deep learning models to predict
-              diabetes, heart disease, lung cancer and breast cancer — all from a
+              Wellnex leverages clinically oriented prediction models to evaluate
+              diabetes, heart disease and breast cancer — all from a
               single dashboard.
             </p>
             <div className="mt-8 flex flex-wrap gap-4">
-              <Link
-                to="/signup"
-                className="bg-white text-primary-700 font-semibold px-6 py-3 rounded-lg hover:bg-primary-50 transition shadow-lg"
-              >
-                Get Started Free
-              </Link>
-              <Link
-                to="/login"
-                className="border border-primary-300 text-white font-semibold px-6 py-3 rounded-lg hover:bg-primary-600 transition"
-              >
-                Login
-              </Link>
+              {user ? (
+                <Link
+                  to="/dashboard"
+                  className="bg-white text-primary-700 font-semibold px-6 py-3 rounded-lg hover:bg-primary-50 transition shadow-lg"
+                >
+                  Go to Dashboard
+                </Link>
+              ) : (
+                <>
+                  <Link
+                    to="/signup"
+                    className="bg-white text-primary-700 font-semibold px-6 py-3 rounded-lg hover:bg-primary-50 transition shadow-lg"
+                  >
+                    Get Started Free
+                  </Link>
+                  <Link
+                    to="/login"
+                    className="border border-primary-300 text-white font-semibold px-6 py-3 rounded-lg hover:bg-primary-600 transition"
+                  >
+                    Login
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -114,11 +117,11 @@ const Landing = () => {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
             {features.map(({ icon: Icon, title, desc, color }) => (
               <div
                 key={title}
-                className="bg-white rounded-xl p-6 border border-gray-100 hover:shadow-lg transition"
+                className="bg-white rounded-xl p-6 border border-gray-100 hover:shadow-lg transition h-full flex flex-col"
               >
                 <div
                   className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${color}`}
@@ -126,7 +129,7 @@ const Landing = () => {
                   <Icon className="w-6 h-6" />
                 </div>
                 <h3 className="font-semibold mb-2">{title}</h3>
-                <p className="text-sm text-gray-500">{desc}</p>
+                <p className="text-sm text-gray-500 flex-1">{desc}</p>
               </div>
             ))}
           </div>
@@ -138,13 +141,15 @@ const Landing = () => {
         <div className="max-w-4xl mx-auto px-4 text-center">
           <h2 className="text-3xl font-bold">Ready to check your health?</h2>
           <p className="mt-3 text-primary-200">
-            Create a free account and get instant predictions.
+            {user
+              ? "You are logged in. Continue with your latest health analysis."
+              : "Create a free account and get instant predictions."}
           </p>
           <Link
-            to="/signup"
+            to={user ? "/dashboard" : "/signup"}
             className="inline-block mt-6 bg-white text-primary-700 font-semibold px-8 py-3 rounded-lg hover:bg-primary-50 transition shadow"
           >
-            Sign Up Now
+            {user ? "Open Dashboard" : "Sign Up Now"}
           </Link>
         </div>
       </section>

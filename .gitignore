@@ -19,3 +19,4 @@ venv/
 *.pkl
 *.joblib
 .DS_Store
+reports/

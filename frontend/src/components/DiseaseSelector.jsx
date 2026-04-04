@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // DiseaseSelector – disease type selection cards
 // ─────────────────────────────────────────────────────────────
-import { FiHeart, FiDroplet, FiWind, FiTarget } from "react-icons/fi";
+import { FiHeart, FiDroplet, FiTarget } from "react-icons/fi";
 
 const diseases = [
   {
@@ -19,13 +19,6 @@ const diseases = [
     description: "Assess cardiovascular disease risk",
   },
   {
-    key: "lung",
-    label: "Lung Cancer",
-    icon: FiWind,
-    color: "text-teal-600 bg-teal-100",
-    description: "Analyse CT scan images for lung cancer",
-  },
-  {
     key: "breast",
     label: "Breast Cancer",
     icon: FiTarget,
@@ -36,7 +29,7 @@ const diseases = [
 
 const DiseaseSelector = ({ selected, onSelect }) => {
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
       {diseases.map(({ key, label, icon: Icon, color, description }) => (
         <button
           key={key}

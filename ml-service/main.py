@@ -88,8 +88,37 @@ MODEL_DIR = Path(os.getenv("MODEL_DIR", "./models"))
 models: dict[str, Any] = {}
 artifacts: dict[str, dict] = {}   # scalers, imputers, feature names, etc.
 
-# Lung cancer class labels (4-class model)
-LUNG_CLASSES = ["Adenocarcinoma", "Large Cell Carcinoma", "Normal", "Squamous Cell Carcinoma"]
+
+def _env_threshold(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        value = float(raw)
+        if 0.0 < value < 1.0:
+            return value
+    except ValueError:
+        pass
+    print(f"⚠️  Invalid {name}={raw!r}. Falling back to {default}.")
+    return float(default)
+
+
+POSITIVE_THRESHOLD = _env_threshold("POSITIVE_THRESHOLD", 0.50)
+# Disease-specific defaults reduce under-calling positives in integrated flows.
+DIABETES_POSITIVE_THRESHOLD = _env_threshold("DIABETES_POSITIVE_THRESHOLD", 0.40)
+HEART_POSITIVE_THRESHOLD = _env_threshold("HEART_POSITIVE_THRESHOLD", 0.20)  # Optimized for better sensitivity (70.7% recall vs 62.1% specificity)
+BREAST_CANCER_THRESHOLD = _env_threshold("BREAST_CANCER_THRESHOLD", 0.50)
+BREAST_CALIBRATION_ENABLED = os.getenv("BREAST_CALIBRATION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _threshold_for_disease(disease: str) -> float:
+    if disease == "diabetes":
+        return DIABETES_POSITIVE_THRESHOLD
+    if disease == "heart":
+        return HEART_POSITIVE_THRESHOLD
+    if disease == "breast":
+        return BREAST_CANCER_THRESHOLD
+    return POSITIVE_THRESHOLD
 
 
 # ── Model loading helpers ─────────────────────────────────────
@@ -111,22 +140,54 @@ def _load_disease(name: str):
 
     art: dict[str, object] = {}
 
-    # ── model file ──
-    model_path = None
-    for ext in (".pkl", ".joblib", ".keras"):
-        candidate = disease_dir / f"model{ext}"
-        if candidate.exists():
-            model_path = candidate
-            break
+    # ── Load multiple breast models for ensemble ──
+    if name == "breast":
+        # Prefer explicit model.keras, but also include any loadable Keras/H5 files.
+        model_candidates: list[Path] = []
+        preferred = disease_dir / "model.keras"
+        if preferred.exists():
+            model_candidates.append(preferred)
 
-    if model_path is None:
-        print(f"⚠️  No model file in {disease_dir}")
-        return
+        for ext in ("*.keras", "*.h5"):
+            for candidate in sorted(disease_dir.glob(ext)):
+                if candidate not in model_candidates:
+                    model_candidates.append(candidate)
 
-    if model_path.suffix == ".keras":
-        art["model"] = _load_keras(model_path)
+        loaded_models = []
+        for candidate in model_candidates:
+            if candidate.exists():
+                try:
+                    model = _load_keras(candidate)
+                    loaded_models.append(model)
+                    print(f"  ✅ Loaded {candidate.name}")
+                except Exception as e:
+                    print(f"  ⚠️  Failed to load {candidate.name}: {e}")
+
+        if not loaded_models:
+            print(f"⚠️  No loadable model files found in {disease_dir}")
+            return
+        
+        # Store as list for ensemble predictions
+        art["models"] = loaded_models  # Multiple models
+        art["model"] = loaded_models[0] if len(loaded_models) == 1 else loaded_models  # Fallback
+        print(f"✅  Loaded {name}: {len(loaded_models)} models")
     else:
-        art["model"] = _load_joblib(model_path)
+        # For diabetes and heart: single model files
+        model_path = None
+        for ext in (".pkl", ".joblib", ".keras", ".h5"):
+            candidate = disease_dir / f"model{ext}"
+            if candidate.exists():
+                model_path = candidate
+                break
+
+        if model_path is None:
+            print(f"⚠️  No model file in {disease_dir}")
+            return
+
+        if model_path.suffix in {".keras", ".h5"}:
+            art["model"] = _load_keras(model_path)
+        else:
+            art["model"] = _load_joblib(model_path)
 
     # ── optional artefacts ──
     for artifact_name in ("scaler", "imputer", "feature_names", "feature_stats"):
@@ -136,19 +197,28 @@ def _load_disease(name: str):
                 art[artifact_name] = _load_joblib(p)
                 break
 
-    models[name] = art["model"]
+    models[name] = art.get("models", art.get("model"))  # Store as list or single
     artifacts[name] = art
-    print(f"✅  Loaded {name}: model + {[k for k in art if k != 'model']}")
+    art_keys = [k for k in art if k not in ('model', 'models')]
+    print(f"✅  Loaded {name}: model + {art_keys}")
 
 
 # ── Startup / Shutdown lifespan ───────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for name in ("diabetes", "heart", "lung", "breast"):
+    # Active models: diabetes, heart, breast
+    diseases_to_load = ["diabetes", "heart", "breast"]
+    print("Starting Wellnex ML Service...")
+
+    for name in diseases_to_load:
+        print(f"📦 Loading {name}...")
         _load_disease(name)
+    
+    print("All active models loaded successfully.")
     yield
     models.clear()
     artifacts.clear()
+    print("Shutting down ML service...")
 
 
 app = FastAPI(title="Wellnex ML Service", version="2.0.0", lifespan=lifespan)
@@ -417,10 +487,6 @@ CHOICE_SYNONYMS: dict[str, dict[str, str]] = {
     },
 }
 
-LUNG_HINTS = {"lung", "chest", "thorax", "ct", "xray", "x-ray"}
-BREAST_HINTS = {"breast", "mammogram", "mammo", "histopath", "biopsy"}
-
-
 def _alias_to_pattern(alias: str) -> str:
     parts = [re.escape(part) for part in alias.strip().split() if part.strip()]
     return r"\s*".join(parts)
@@ -461,6 +527,38 @@ def _coerce_choice(field: str, value: Any) -> str | None:
         if normalized == key.lower():
             return canonical
     return None
+
+
+def _calibrate_breast_probability(raw_prob: float) -> float:
+    """
+    Optional post-processing for breast model confidence.
+    Disabled by default to preserve original model confidence behavior.
+    """
+    p = float(np.clip(raw_prob, 1e-6, 1 - 1e-6))
+
+    if not BREAST_CALIBRATION_ENABLED:
+        return p
+
+    # Mild temperature scaling (previous stronger scaling compressed scores too much).
+    temperature = 1.2
+    logit = np.log(p / (1 - p))
+    temp_scaled = 1.0 / (1.0 + np.exp(-(logit / temperature)))
+
+    # Blend raw + scaled probabilities to preserve ranking and avoid flat ~0.55 outputs.
+    calibrated = (0.65 * p) + (0.35 * temp_scaled)
+
+    # Apply conservative penalty for positive side to reduce weak false positives.
+    if calibrated >= 0.5:
+        calibrated *= 0.92
+
+    return float(np.clip(calibrated, 0.0, 1.0))
+
+
+def _breast_labels(probability: float) -> tuple[str, str]:
+    is_malignant = probability >= BREAST_CANCER_THRESHOLD
+    if is_malignant:
+        return "Positive", "Malignant"
+    return "Negative", "Benign"
 
 
 def _extract_number(text: str, aliases: list[str]) -> float | None:
@@ -669,35 +767,56 @@ def _is_real_image(file_bytes: bytes) -> bool:
         return False
 
 
-def _infer_cancer_intent(filename: str | None, extracted_text: str) -> str:
-    haystack = f"{filename or ''} {extracted_text or ''}".lower()
-    has_lung = any(token in haystack for token in LUNG_HINTS)
-    has_breast = any(token in haystack for token in BREAST_HINTS)
-    if has_lung and not has_breast:
-        return "lung"
-    if has_breast and not has_lung:
-        return "breast"
-    return "unknown"
-
-
-def _prepare_image_array(
-    file_bytes: bytes,
-    extracted_text: str,
-    target_size: tuple[int, int],
-) -> tuple[np.ndarray, str]:
-    try:
-        img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-        img = img.resize(target_size)
-        arr = np.array(img, dtype=np.float32) / 255.0
-        return np.expand_dims(arr, axis=0), "uploaded-image"
-    except Exception:
-        fallback_arr = _render_text_to_image(extracted_text, target_size)
-        return fallback_arr, "generated-from-text"
-
 def _ensure(name: str):
     if name not in models:
         raise HTTPException(503, f"Model '{name}' is not loaded.")
     return models[name], artifacts.get(name, {})
+
+
+def _target_size_from_model(model, fallback: tuple[int, int]) -> tuple[int, int]:
+    """Read (height, width) from Keras model input shape with safe fallback."""
+    input_shape = getattr(model, "input_shape", None)
+    if isinstance(input_shape, list) and input_shape:
+        input_shape = input_shape[0]
+
+    if isinstance(input_shape, tuple) and len(input_shape) >= 3:
+        h, w = input_shape[1], input_shape[2]
+        if isinstance(h, int) and isinstance(w, int) and h > 0 and w > 0:
+            return (h, w)
+    return fallback
+
+
+# ── Ensemble Prediction Functions ───────────────────────────
+def _ensemble_breast_prediction(models_list: list, img: np.ndarray) -> tuple[float, dict]:
+    """
+    Ensemble prediction for breast cancer using multiple models.
+    Returns: (average_probability, predictions_per_model)
+    """
+    if not isinstance(models_list, list):
+        # Single model case
+        prob = float(models_list.predict(img, verbose=0)[0][0])
+        return prob, {"model_0": prob}
+    
+    # Multiple models ensemble
+    all_probs = []
+    model_probs = {}
+    
+    for i, model in enumerate(models_list):
+        try:
+            prob = float(model.predict(img, verbose=0)[0][0])
+            all_probs.append(prob)
+            model_probs[f"model_{i}"] = round(prob, 4)
+        except Exception as e:
+            print(f"⚠️  Model {i} prediction failed: {e}")
+            continue
+    
+    if not all_probs:
+        raise ValueError("All ensemble models failed prediction")
+    
+    # Average probability across all models
+    avg_prob = float(np.mean(all_probs))
+    
+    return avg_prob, model_probs
 
 
 def _preprocess_image(file_bytes: bytes, target_size: tuple[int, int] = (224, 224)) -> np.ndarray:
@@ -1019,7 +1138,8 @@ async def predict_diabetes(data: DiabetesInput):
         prob = float(model.predict_proba(X)[0][1])
     else:
         prob = float(model.predict(X)[0])
-    label = "Positive" if prob >= 0.5 else "Negative"
+    threshold = _threshold_for_disease("diabetes")
+    label = "Positive" if prob >= threshold else "Negative"
     return PredictionResult(prediction=label, probability=round(prob, 4))
 
 
@@ -1031,33 +1151,25 @@ async def predict_heart(data: HeartInput):
         prob = float(model.predict_proba(X)[0][1])
     else:
         prob = float(model.predict(X)[0])
-    label = "Positive" if prob >= 0.5 else "Negative"
+    threshold = _threshold_for_disease("heart")
+    label = "Positive" if prob >= threshold else "Negative"
     return PredictionResult(prediction=label, probability=round(prob, 4))
-
-
-@app.post("/predict/lung", response_model=PredictionResult)
-async def predict_lung(file: UploadFile = File(...)):
-    model, _ = _ensure("lung")
-    contents = await file.read()
-    img = _preprocess_image(contents, target_size=(448, 448))
-    preds = model.predict(img, verbose=0)[0]  # shape (4,)
-    class_idx = int(np.argmax(preds))
-    confidence = float(preds[class_idx])
-    label = LUNG_CLASSES[class_idx]
-    prediction = "Negative" if label == "Normal" else "Positive"
-    return PredictionResult(
-        prediction=f"{prediction} ({label})",
-        probability=round(confidence, 4),
-    )
 
 
 @app.post("/predict/breast", response_model=PredictionResult)
 async def predict_breast(file: UploadFile = File(...)):
-    model, _ = _ensure("breast")
+    # Breast cancer prediction with ensemble + calibration + breast-specific threshold
+    models_list, art = _ensure("breast")
     contents = await file.read()
-    img = _preprocess_image(contents, target_size=(160, 160))
-    prob = float(model.predict(img, verbose=0)[0][0])
-    label = "Positive" if prob >= 0.5 else "Negative"
+    primary_model = models_list[0] if isinstance(models_list, list) else models_list
+    target_size = _target_size_from_model(primary_model, fallback=(160, 160))
+    img = _preprocess_image(contents, target_size=target_size)
+
+    # Ensemble prediction: average probability across all models
+    raw_prob, model_probs = _ensemble_breast_prediction(models_list, img)
+    prob = _calibrate_breast_probability(raw_prob)
+    label, _ = _breast_labels(prob)
+
     return PredictionResult(prediction=label, probability=round(prob, 4))
 
 
@@ -1073,8 +1185,17 @@ async def predict_unified(
 
     contents = await file.read()
     extracted_text = _extract_text_from_file(contents, file.filename, file.content_type)
+
+    # Optional manual textual notes for diabetes/heart can be sent via supplemental_data.manual_text.
+    manual_text = supplemental.get("manual_text", {}) if isinstance(supplemental, dict) else {}
+    if isinstance(manual_text, dict):
+        diabetes_text = str(manual_text.get("diabetes", "") or "").strip()
+        heart_text = str(manual_text.get("heart", "") or "").strip()
+        merged_manual_text = "\n".join(part for part in [diabetes_text, heart_text] if part)
+        if merged_manual_text:
+            extracted_text = f"{extracted_text}\n{merged_manual_text}".strip()
+
     is_real_image = _is_real_image(contents)
-    cancer_intent = _infer_cancer_intent(file.filename, extracted_text)
 
     diabetes_raw, heart_raw = _extract_inputs_from_text(extracted_text)
     _apply_supplemental_inputs(diabetes_raw, heart_raw, supplemental)
@@ -1128,12 +1249,14 @@ async def predict_unified(
                 d_prob = float(d_model.predict_proba(d_arr)[0][1])
             else:
                 d_prob = float(d_model.predict(d_arr)[0])
-            d_label = "Positive" if d_prob >= 0.5 else "Negative"
+            d_threshold = _threshold_for_disease("diabetes")
+            d_label = "Positive" if d_prob >= d_threshold else "Negative"
             model_results["diabetes"] = {
                 "status": "success",
                 "prediction": d_label,
                 "probability": round(d_prob, 4),
                 "positive_probability": round(d_prob, 4),
+                "threshold": d_threshold,
             }
         except Exception as exc:
             model_results["diabetes"] = {
@@ -1165,12 +1288,14 @@ async def predict_unified(
                 h_prob = float(h_model.predict_proba(h_arr)[0][1])
             else:
                 h_prob = float(h_model.predict(h_arr)[0])
-            h_label = "Positive" if h_prob >= 0.5 else "Negative"
+            h_threshold = _threshold_for_disease("heart")
+            h_label = "Positive" if h_prob >= h_threshold else "Negative"
             model_results["heart"] = {
                 "status": "success",
                 "prediction": h_label,
                 "probability": round(h_prob, 4),
                 "positive_probability": round(h_prob, 4),
+                "threshold": h_threshold,
             }
         except Exception as exc:
             model_results["heart"] = {
@@ -1180,57 +1305,33 @@ async def predict_unified(
 
     image_source = "uploaded-image" if is_real_image else "non-image"
 
+    # ── Cancer Models (Breast) ──
     if not is_real_image:
-        model_results["lung"] = {
-            "status": "skipped",
-            "reason": "Cancer models require a medical image (CT/mammogram/histopathology).",
-        }
         model_results["breast"] = {
             "status": "skipped",
-            "reason": "Cancer models require a medical image (CT/mammogram/histopathology).",
+            "reason": "Breast cancer model requires a medical image (mammogram/histopathology).",
         }
     else:
-        # For real medical images, evaluate both cancer models.
+        # ── Breast Cancer Prediction (Multi-Model Ensemble) ──
         try:
-            lung_model, _ = _ensure("lung")
-            lung_img, image_source = _prepare_image_array(contents, extracted_text, (448, 448))
-            lung_preds = lung_model.predict(lung_img, verbose=0)[0]
-            class_idx = int(np.argmax(lung_preds))
-            class_name = LUNG_CLASSES[class_idx]
-            class_conf = float(lung_preds[class_idx])
-            normal_prob = float(lung_preds[LUNG_CLASSES.index("Normal")])
-            lung_positive_prob = 1.0 - normal_prob
-            lung_prediction = "Negative (Normal)" if class_name == "Normal" else f"Positive ({class_name})"
-            lung_score = float(class_conf * lung_positive_prob)
-            if cancer_intent == "lung":
-                lung_score += 0.10
-            model_results["lung"] = {
-                "status": "success",
-                "prediction": lung_prediction,
-                "probability": round(class_conf, 4),
-                "positive_probability": round(lung_positive_prob, 4),
-                "selection_score": round(lung_score, 4),
-            }
-        except Exception as exc:
-            model_results["lung"] = {
-                "status": "error",
-                "error": str(exc),
-            }
-
-        try:
-            breast_model, _ = _ensure("breast")
-            breast_img, image_source = _prepare_image_array(contents, extracted_text, (160, 160))
-            breast_prob = float(breast_model.predict(breast_img, verbose=0)[0][0])
-            breast_label = "Positive" if breast_prob >= 0.5 else "Negative"
-            breast_score = float(breast_prob)
-            if cancer_intent == "breast":
-                breast_score += 0.10
+            breast_models, breast_art = _ensure("breast")
+            breast_primary_model = breast_models[0] if isinstance(breast_models, list) else breast_models
+            breast_target_size = _target_size_from_model(breast_primary_model, fallback=(160, 160))
+            breast_img = _preprocess_image(contents, target_size=breast_target_size)
+            breast_raw_prob, model_probs = _ensemble_breast_prediction(breast_models, breast_img)
+            breast_prob = _calibrate_breast_probability(breast_raw_prob)
+            breast_prediction, breast_diagnosis = _breast_labels(breast_prob)
+            
             model_results["breast"] = {
                 "status": "success",
-                "prediction": breast_label,
+                "prediction": breast_prediction,
+                "diagnosis": breast_diagnosis,
                 "probability": round(breast_prob, 4),
+                "raw_probability": round(breast_raw_prob, 4),
                 "positive_probability": round(breast_prob, 4),
-                "selection_score": round(breast_score, 4),
+                "selection_score": round(breast_prob, 4),
+                "threshold": BREAST_CANCER_THRESHOLD,
+                "ensemble_models": model_probs,
             }
         except Exception as exc:
             model_results["breast"] = {
@@ -1246,22 +1347,14 @@ async def predict_unified(
         and isinstance(res.get("positive_probability"), (float, int))
     ]
 
-    cancer_threshold = 0.8 if cancer_intent == "unknown" else 0.5
-
+    # Scoring logic - breast cancer only
     scored_cancer = [
         (disease, float(res.get("selection_score", res["positive_probability"])))
         for disease, res in model_results.items()
-        if disease in {"lung", "breast"}
+        if disease in {"breast"}
         and res.get("status") == "success"
         and isinstance(res.get("positive_probability"), (float, int))
-        and float(res.get("selection_score", res.get("positive_probability", 0))) >= cancer_threshold
     ]
-
-    if cancer_intent == "unknown" and len(scored_cancer) >= 2:
-        sorted_c = sorted(scored_cancer, key=lambda item: item[1], reverse=True)
-        # Avoid arbitrarily choosing between breast/lung when both are similarly high.
-        if (sorted_c[0][1] - sorted_c[1][1]) < 0.15:
-            scored_cancer = []
 
     # Strict modality routing.
     if is_real_image:
@@ -1277,6 +1370,13 @@ async def predict_unified(
     else:
         likely_disease, confidence = None, 0.0
 
+    likely_result = model_results.get(likely_disease, {}) if likely_disease else {}
+    summary_threshold = float(likely_result.get("threshold", POSITIVE_THRESHOLD))
+    if likely_result.get("status") == "success" and likely_result.get("prediction"):
+        summary_prediction = likely_result["prediction"]
+    else:
+        summary_prediction = "Positive" if confidence >= summary_threshold else "Negative"
+
     needs_user_input = bool(
         (model_results.get("diabetes", {}).get("status") == "needs_input")
         or (model_results.get("heart", {}).get("status") == "needs_input")
@@ -1287,6 +1387,8 @@ async def predict_unified(
         "summary": {
             "likely_disease": likely_disease,
             "confidence": round(confidence, 4),
+            "prediction": summary_prediction,
+            "threshold": round(summary_threshold, 4),
             "provisional": needs_user_input,
             "overall_prediction": (
                 f"Most likely {likely_disease}" if likely_disease else "Unable to determine"
@@ -1307,7 +1409,6 @@ async def predict_unified(
             "size": len(contents),
             "cancer_image_source": image_source,
             "is_real_image": is_real_image,
-            "cancer_intent": cancer_intent,
             "tabular_intent": tabular_intent,
             "text_extracted": bool(extracted_text.strip()),
         },

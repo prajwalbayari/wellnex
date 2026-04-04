@@ -17,8 +17,8 @@ export const predictTabular = async (diseaseType, inputData) => {
 };
 
 /**
- * Submit an image prediction (lung / breast).
- * @param {string} diseaseType – "lung" | "breast"
+ * Submit an image prediction (breast only).
+ * @param {string} diseaseType – "breast"
  * @param {File}   imageFile   – user-selected image file
  */
 export const predictImage = async (diseaseType, imageFile) => {
@@ -33,7 +33,7 @@ export const predictImage = async (diseaseType, imageFile) => {
 };
 
 /**
- * Unified prediction from a single uploaded report.
+ * Unified prediction from a single uploaded report (diabetes + heart + breast).
  * @param {File} file
  * @param {object} supplementalData - optional missing field values
  */

@@ -13,26 +13,6 @@ const selectFields = [
     options: ["Female", "Male", "Other"],
   },
   {
-    name: "ethnicity",
-    label: "Ethnicity",
-    options: ["Asian", "Black", "Hispanic", "Other", "White"],
-  },
-  {
-    name: "education_level",
-    label: "Education Level",
-    options: ["Bachelor", "Highschool", "No formal", "Postgraduate"],
-  },
-  {
-    name: "income_level",
-    label: "Income Level",
-    options: ["High", "Low", "Lower-Middle", "Middle", "Upper-Middle"],
-  },
-  {
-    name: "employment_status",
-    label: "Employment Status",
-    options: ["Employed", "Retired", "Student", "Unemployed"],
-  },
-  {
     name: "smoking_status",
     label: "Smoking Status",
     options: ["Current", "Former", "Never"],
@@ -54,13 +34,20 @@ const numberFields = [
   { name: "hdl_cholesterol", label: "HDL Cholesterol", placeholder: "mg/dL" },
   { name: "ldl_cholesterol", label: "LDL Cholesterol", placeholder: "mg/dL" },
   { name: "triglycerides", label: "Triglycerides", placeholder: "mg/dL" },
-  { name: "alcohol_consumption_per_week", label: "Alcohol (drinks/week)", placeholder: "e.g. 3" },
-  { name: "physical_activity_minutes_per_week", label: "Physical Activity (min/week)", placeholder: "e.g. 150" },
-  { name: "diet_score", label: "Diet Score (1-10)", placeholder: "e.g. 5" },
-  { name: "sleep_hours_per_day", label: "Sleep (hours/day)", placeholder: "e.g. 7" },
-  { name: "screen_time_hours_per_day", label: "Screen Time (hours/day)", placeholder: "e.g. 4" },
-  { name: "diabetes_risk_score", label: "Diabetes Risk Score (0-10)", placeholder: "e.g. 0" },
 ];
+
+const modelDefaults = {
+  ethnicity: "White",
+  education_level: "Bachelor",
+  income_level: "Middle",
+  employment_status: "Employed",
+  alcohol_consumption_per_week: 0,
+  physical_activity_minutes_per_week: 150,
+  diet_score: 5,
+  sleep_hours_per_day: 7,
+  screen_time_hours_per_day: 4,
+  diabetes_risk_score: 0,
+};
 
 const toggleFields = [
   { name: "family_history_diabetes", label: "Family History of Diabetes" },
@@ -73,10 +60,6 @@ const toggleFields = [
 const defaultState = {
   // selects
   gender: "Male",
-  ethnicity: "White",
-  education_level: "Bachelor",
-  income_level: "Middle",
-  employment_status: "Employed",
   smoking_status: "Never",
   // numbers
   ...Object.fromEntries(numberFields.map((f) => [f.name, ""])),
@@ -97,7 +80,7 @@ const DiabetesForm = ({ onSubmit, loading }) => {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    const payload = {};
+    const payload = { ...modelDefaults };
     // keep strings for categorical fields
     for (const sf of selectFields) payload[sf.name] = form[sf.name];
     // convert numbers
@@ -116,7 +99,7 @@ const DiabetesForm = ({ onSubmit, loading }) => {
       {/* ── Categorical selects ── */}
       <fieldset>
         <legend className="text-sm font-semibold text-gray-700 mb-2">
-          Demographics &amp; Lifestyle
+          Basic Profile
         </legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {selectFields.map((sf) => (

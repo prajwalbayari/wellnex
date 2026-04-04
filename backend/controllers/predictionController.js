@@ -7,10 +7,10 @@ import axios from "axios";
 import FormData from "form-data";
 
 import Prediction from "../models/Prediction.js";
-import { uploadToCloudinary } from "../config/cloudinary.js";
+// import { uploadToCloudinary } from "../config/cloudinary.js";
 
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8001";
-const SUPPORTED_DISEASES = ["diabetes", "heart", "lung", "breast"];
+const SUPPORTED_DISEASES = ["diabetes", "heart", "breast"];
 
 // ── Tabular Prediction (Diabetes / Heart) ────────────────────
 /**
@@ -46,7 +46,7 @@ export const predictTabular = asyncHandler(async (req, res) => {
   res.status(201).json(record);
 });
 
-// ── Image Prediction (Lung / Breast Cancer) ──────────────────
+// ── Image Prediction (Breast Cancer only) ────────────────────
 /**
  * @route   POST /api/predictions/image
  * @desc    Upload image → Cloudinary, send to ML, save result
@@ -55,9 +55,9 @@ export const predictTabular = asyncHandler(async (req, res) => {
 export const predictImage = asyncHandler(async (req, res) => {
   const { diseaseType } = req.body;
 
-  if (!["lung", "breast"].includes(diseaseType)) {
+  if (!["breast"].includes(diseaseType)) {
     res.status(400);
-    throw new Error("diseaseType must be 'lung' or 'breast'");
+    throw new Error("diseaseType must be 'breast'");
   }
 
   if (!req.file) {
@@ -65,14 +65,7 @@ export const predictImage = asyncHandler(async (req, res) => {
     throw new Error("Image file is required");
   }
 
-  // 1. Upload image to Cloudinary
-  const cloudResult = await uploadToCloudinary(
-    req.file.buffer,
-    `wellnex/${diseaseType}`
-  );
-  const imageUrl = cloudResult.secure_url;
-
-  // 2. Forward image buffer to ML microservice as multipart
+  // Forward image buffer to ML microservice as multipart
   const form = new FormData();
   form.append("file", req.file.buffer, {
     filename: req.file.originalname,
@@ -87,22 +80,19 @@ export const predictImage = asyncHandler(async (req, res) => {
 
   const { prediction, probability } = mlResponse.data;
 
-  // 3. Persist prediction
-  const record = await Prediction.create({
-    userId: req.user._id,
+  // Image persistence is intentionally disabled for testing phase.
+  res.status(200).json({
     diseaseType,
-    imageUrl,
     predictionResult: prediction,
     probability,
+    persisted: false,
   });
-
-  res.status(201).json(record);
 });
 
 // ── Unified Prediction (Any Report Format) ──────────────────
 /**
  * @route   POST /api/predictions/unified
- * @desc    Upload any report file, run all 4 models, optionally ask for missing fields
+ * @desc    Upload any report file, run unified pipeline (diabetes + heart + breast), optionally ask for missing fields
  * @access  Private
  */
 export const predictUnified = asyncHandler(async (req, res) => {
@@ -135,43 +125,31 @@ export const predictUnified = asyncHandler(async (req, res) => {
 
   const analysis = mlResponse.data;
   const likelyDisease = analysis?.summary?.likely_disease;
+
   const likelyResult = analysis?.model_results?.[likelyDisease];
+  const isImageUpload = req.file.mimetype?.startsWith("image/");
   const canPersist =
     SUPPORTED_DISEASES.includes(likelyDisease) &&
-    likelyResult?.status === "success";
+    likelyResult?.status === "success" &&
+    !isImageUpload;
 
   let savedPrediction = null;
 
   if (canPersist) {
     const confidence = Number(analysis?.summary?.confidence ?? 0);
-    const predictionResult =
-      confidence >= 0.5
-        ? `Positive (Likely ${likelyDisease})`
-        : `Inconclusive (Likely ${likelyDisease})`;
+    const modelLabel = String(likelyResult?.prediction || analysis?.summary?.prediction || "Negative");
+    const predictionResult = `${modelLabel} (${likelyDisease})`;
 
     let inputData = {};
     if (["diabetes", "heart"].includes(likelyDisease)) {
       inputData = analysis?.resolved_inputs?.[likelyDisease] || {};
     }
 
-    let imageUrl = null;
-    if (req.file.mimetype?.startsWith("image/")) {
-      try {
-        const cloudResult = await uploadToCloudinary(
-          req.file.buffer,
-          "wellnex/unified"
-        );
-        imageUrl = cloudResult.secure_url;
-      } catch {
-        // Continue even if image archival fails; prediction output is still valid.
-      }
-    }
-
     savedPrediction = await Prediction.create({
       userId: req.user._id,
       diseaseType: likelyDisease,
       inputData,
-      imageUrl,
+      imageUrl: null,
       predictionResult,
       probability: confidence,
     });
