@@ -23,6 +23,10 @@ from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 import tensorflow as tf
 import keras
+try:
+    from catboost import CatBoostClassifier
+except Exception:
+    CatBoostClassifier = None
 
 try:
     from pypdf import PdfReader
@@ -171,6 +175,91 @@ def _load_disease(name: str):
         art["models"] = loaded_models  # Multiple models
         art["model"] = loaded_models[0] if len(loaded_models) == 1 else loaded_models  # Fallback
         print(f"✅  Loaded {name}: {len(loaded_models)} models")
+    elif name == "heart":
+        # Prefer FHS ensemble artifacts when available.
+        fhs_candidates = {
+            "catboost": disease_dir / "catboost_fhs.cbm",
+            "xgboost": disease_dir / "xgboost_fhs.joblib",
+            "lightgbm": disease_dir / "lightgbm_fhs.joblib",
+            "randomforest": disease_dir / "randomforest_fhs.joblib",
+            "stacking": disease_dir / "stacking_fhs.joblib",
+        }
+
+        has_core_fhs_bundle = all(path.exists() for path in (
+            fhs_candidates["xgboost"],
+            fhs_candidates["lightgbm"],
+            fhs_candidates["randomforest"],
+            fhs_candidates["stacking"],
+        ))
+
+        if has_core_fhs_bundle:
+            heart_models: dict[str, Any] = {}
+            if CatBoostClassifier is not None and fhs_candidates["catboost"].exists():
+                try:
+                    heart_models["catboost"] = CatBoostClassifier()
+                    heart_models["catboost"].load_model(str(fhs_candidates["catboost"]))
+                except Exception as e:
+                    print(f"⚠️  Failed to load catboost_fhs.cbm: {e}")
+            elif fhs_candidates["catboost"].exists():
+                print("⚠️  catboost package not installed; skipping catboost_fhs.cbm")
+            for key in ("xgboost", "lightgbm", "randomforest", "stacking"):
+                try:
+                    heart_models[key] = _load_joblib(fhs_candidates[key])
+                except Exception as e:
+                    print(f"⚠️  Failed to load {fhs_candidates[key].name}: {e}")
+
+            if not any(k in heart_models for k in ("xgboost", "lightgbm", "randomforest", "stacking", "catboost")):
+                print(f"⚠️  No usable FHS heart models loaded from {disease_dir}")
+                return
+
+            art["heart_models"] = heart_models
+            art["heart_model_type"] = "fhs_ensemble"
+
+            # Preprocessing artifacts from FHS training outputs.
+            scaler_path = disease_dir / "scaler_fhs.joblib"
+            imputer_path = disease_dir / "imputer_fhs.joblib"
+            feature_names_path = disease_dir / "feature_names_fhs.joblib"
+            if scaler_path.exists():
+                art["scaler"] = _load_joblib(scaler_path)
+            if imputer_path.exists():
+                art["imputer"] = _load_joblib(imputer_path)
+            if feature_names_path.exists():
+                art["feature_names"] = _load_joblib(feature_names_path)
+
+            # Optional ensemble weights from training notebook.
+            ew_path = disease_dir / "ensemble_weights_fhs.joblib"
+            bw_path = disease_dir / "blend_weights_fhs.joblib"
+            if ew_path.exists():
+                art["ensemble_weights"] = _load_joblib(ew_path)
+            if bw_path.exists():
+                art["blend_weights"] = _load_joblib(bw_path)
+
+            # Primary model kept for compatibility with older code paths.
+            art["model"] = (
+                heart_models.get("stacking")
+                or heart_models.get("xgboost")
+                or heart_models.get("lightgbm")
+                or heart_models.get("randomforest")
+                or heart_models.get("catboost")
+            )
+            print("✅  Loaded heart: FHS ensemble bundle")
+        else:
+            # For diabetes and heart legacy mode: single model files
+            model_path = None
+            for ext in (".pkl", ".joblib", ".keras", ".h5"):
+                candidate = disease_dir / f"model{ext}"
+                if candidate.exists():
+                    model_path = candidate
+                    break
+
+            if model_path is None:
+                print(f"⚠️  No model file in {disease_dir}")
+                return
+
+            if model_path.suffix in {".keras", ".h5"}:
+                art["model"] = _load_keras(model_path)
+            else:
+                art["model"] = _load_joblib(model_path)
     else:
         # For diabetes and heart: single model files
         model_path = None
@@ -819,6 +908,72 @@ def _ensemble_breast_prediction(models_list: list, img: np.ndarray) -> tuple[flo
     return avg_prob, model_probs
 
 
+def _heart_probability(model: Any, art: dict, X: np.ndarray) -> tuple[float, dict[str, float]]:
+    """Predict heart probability, preferring FHS ensemble artifacts when present."""
+    heart_models = art.get("heart_models")
+    if isinstance(heart_models, dict) and heart_models:
+        model_probs: dict[str, float] = {}
+        base_order = ["catboost", "xgboost", "lightgbm", "randomforest"]
+        base_probs: list[float] = []
+
+        for name in base_order:
+            m = heart_models.get(name)
+            if m is None:
+                continue
+            p = float(m.predict_proba(X)[0][1]) if hasattr(m, "predict_proba") else float(m.predict(X)[0])
+            p = float(np.clip(p, 0.0, 1.0))
+            model_probs[name] = round(p, 4)
+            base_probs.append(p)
+
+        if not base_probs:
+            raise ValueError("Heart ensemble base models unavailable for prediction")
+
+        weights_raw = art.get("ensemble_weights")
+        weights = np.ones(len(base_probs), dtype=np.float64)
+        if isinstance(weights_raw, dict):
+            weights = np.array([float(weights_raw.get(k, 1.0)) for k in base_order[:len(base_probs)]], dtype=np.float64)
+        elif isinstance(weights_raw, (list, tuple, np.ndarray)) and len(weights_raw) >= len(base_probs):
+            weights = np.array([float(v) for v in weights_raw[:len(base_probs)]], dtype=np.float64)
+
+        if float(weights.sum()) <= 0:
+            weights = np.ones(len(base_probs), dtype=np.float64)
+        weights = weights / weights.sum()
+
+        weighted_ensemble = float(np.dot(np.array(base_probs, dtype=np.float64), weights))
+        model_probs["weighted_ensemble"] = round(weighted_ensemble, 4)
+
+        stacking_prob = None
+        stacking_model = heart_models.get("stacking")
+        if stacking_model is not None:
+            stacking_prob = float(stacking_model.predict_proba(X)[0][1]) if hasattr(stacking_model, "predict_proba") else float(stacking_model.predict(X)[0])
+            stacking_prob = float(np.clip(stacking_prob, 0.0, 1.0))
+            model_probs["stacking"] = round(stacking_prob, 4)
+
+        blend_weights = art.get("blend_weights", {})
+        blend_ens = float(blend_weights.get("blend_ens", 1.0)) if isinstance(blend_weights, dict) else 1.0
+        blend_stack = float(blend_weights.get("blend_stack", 0.0)) if isinstance(blend_weights, dict) else 0.0
+
+        if stacking_prob is not None:
+            total = blend_ens + blend_stack
+            if total <= 0:
+                blend_ens, blend_stack, total = 1.0, 0.0, 1.0
+            prob = (blend_ens * weighted_ensemble + blend_stack * stacking_prob) / total
+        else:
+            prob = weighted_ensemble
+
+        prob = float(np.clip(prob, 0.0, 1.0))
+        model_probs["final_blend"] = round(prob, 4)
+        return prob, model_probs
+
+    # Backward-compatible single-model heart prediction.
+    if hasattr(model, "predict_proba"):
+        prob = float(model.predict_proba(X)[0][1])
+    else:
+        prob = float(model.predict(X)[0])
+    prob = float(np.clip(prob, 0.0, 1.0))
+    return prob, {"model": round(prob, 4)}
+
+
 def _preprocess_image(file_bytes: bytes, target_size: tuple[int, int] = (224, 224)) -> np.ndarray:
     img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
     img = img.resize(target_size)
@@ -1147,10 +1302,7 @@ async def predict_diabetes(data: DiabetesInput):
 async def predict_heart(data: HeartInput):
     model, art = _ensure("heart")
     X = _heart_preprocess(data, art)
-    if hasattr(model, "predict_proba"):
-        prob = float(model.predict_proba(X)[0][1])
-    else:
-        prob = float(model.predict(X)[0])
+    prob, _ = _heart_probability(model, art, X)
     threshold = _threshold_for_disease("heart")
     label = "Positive" if prob >= threshold else "Negative"
     return PredictionResult(prediction=label, probability=round(prob, 4))
@@ -1284,10 +1436,7 @@ async def predict_unified(
         try:
             h_model, h_art = _ensure("heart")
             h_arr = _heart_preprocess(HeartInput(**heart_input), h_art)
-            if hasattr(h_model, "predict_proba"):
-                h_prob = float(h_model.predict_proba(h_arr)[0][1])
-            else:
-                h_prob = float(h_model.predict(h_arr)[0])
+            h_prob, h_components = _heart_probability(h_model, h_art, h_arr)
             h_threshold = _threshold_for_disease("heart")
             h_label = "Positive" if h_prob >= h_threshold else "Negative"
             model_results["heart"] = {
@@ -1296,6 +1445,7 @@ async def predict_unified(
                 "probability": round(h_prob, 4),
                 "positive_probability": round(h_prob, 4),
                 "threshold": h_threshold,
+                "ensemble_models": h_components,
             }
         except Exception as exc:
             model_results["heart"] = {
