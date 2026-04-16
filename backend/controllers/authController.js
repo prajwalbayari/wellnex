@@ -13,14 +13,40 @@ import generateToken from "../utils/generateToken.js";
 export const signup = asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
 
+  if (
+    typeof name !== "string" ||
+    typeof email !== "string" ||
+    typeof password !== "string"
+  ) {
+    res.status(400);
+    throw new Error("name, email, and password are required");
+  }
+
+  const normalizedName = name.trim();
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!normalizedName || !normalizedEmail || !password.trim()) {
+    res.status(400);
+    throw new Error("name, email, and password are required");
+  }
+
+  if (password.length < 6) {
+    res.status(400);
+    throw new Error("Password must be at least 6 characters");
+  }
+
   // Check if user already exists
-  const existingUser = await User.findOne({ email });
+  const existingUser = await User.findOne({ email: normalizedEmail });
   if (existingUser) {
     res.status(400);
     throw new Error("User already exists with this email");
   }
 
-  const user = await User.create({ name, email, password });
+  const user = await User.create({
+    name: normalizedName,
+    email: normalizedEmail,
+    password,
+  });
 
   res.status(201).json({
     _id: user._id,
@@ -38,7 +64,18 @@ export const signup = asyncHandler(async (req, res) => {
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email });
+  if (typeof email !== "string" || typeof password !== "string") {
+    res.status(400);
+    throw new Error("email and password are required");
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail || !password.trim()) {
+    res.status(400);
+    throw new Error("email and password are required");
+  }
+
+  const user = await User.findOne({ email: normalizedEmail });
 
   if (user && (await user.matchPassword(password))) {
     return res.json({

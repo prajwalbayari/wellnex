@@ -234,12 +234,18 @@ const HistoryTable = ({ predictions, onDelete }) => {
                       </span>
                     ) : (
                       p.imageUrl && (
-                        <img
-                          src={p.imageUrl}
-                          alt="scan"
-                          className="w-8 h-8 rounded object-cover border border-gray-200 cursor-pointer hover:ring-2 hover:ring-primary-400 transition"
+                        <button
+                          type="button"
                           onClick={() => toggle(p._id)}
-                        />
+                          className="rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                          aria-label="View prediction image details"
+                        >
+                          <img
+                            src={p.imageUrl}
+                            alt="Prediction thumbnail"
+                            className="w-8 h-8 rounded object-cover border border-gray-200 cursor-pointer hover:ring-2 hover:ring-primary-400 transition"
+                          />
+                        </button>
                       )
                     )}
                   </td>

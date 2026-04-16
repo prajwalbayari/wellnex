@@ -35,5 +35,7 @@ const predictionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+predictionSchema.index({ userId: 1, createdAt: -1 });
+
 const Prediction = mongoose.model("Prediction", predictionSchema);
 export default Prediction;

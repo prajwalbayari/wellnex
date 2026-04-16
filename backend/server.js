@@ -4,8 +4,14 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+if (!process.env.JWT_SECRET || !process.env.JWT_SECRET.trim()) {
+  throw new Error("Missing required JWT_SECRET environment variable");
+}
+
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 import connectDB from "./config/db.js";
 import { ensureConfigured } from "./config/cloudinary.js";
@@ -13,8 +19,12 @@ import authRoutes from "./routes/authRoutes.js";
 import predictionRoutes from "./routes/predictionRoutes.js";
 import { notFound, errorHandler } from "./middleware/errorMiddleware.js";
 
-// Initialize Cloudinary after env vars are loaded
-ensureConfigured();
+// Initialize Cloudinary if configured. Image prediction does not depend on it.
+try {
+  ensureConfigured();
+} catch (error) {
+  console.warn(`Cloudinary not configured at startup: ${error.message}`);
+}
 
 // Connect to MongoDB
 await connectDB();
@@ -22,9 +32,27 @@ await connectDB();
 const app = express();
 
 // ── Global Middleware ────────────────────────────────────────
-app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
+  : ["http://localhost:5173"];
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  })
+);
+app.use(helmet());
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_MAX || 300),
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+);
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // ── Health Check ─────────────────────────────────────────────
 app.get("/api/health", (_req, res) => {
@@ -42,5 +70,5 @@ app.use(errorHandler);
 // ── Start Server ─────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀  Wellnex backend running on port ${PORT}`);
+  console.log(`Wellnex backend running on port ${PORT}`);
 });

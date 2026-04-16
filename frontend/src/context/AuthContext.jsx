@@ -11,7 +11,13 @@ const STORAGE_KEY = "wellnex_user";
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : null;
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
   });
 
   // Persist user to localStorage whenever it changes

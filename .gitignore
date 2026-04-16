@@ -15,8 +15,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-*.keras
-*.pkl
-*.joblib
 .DS_Store
 reports/

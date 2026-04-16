@@ -1,0 +1,105 @@
+{
+  "best_model": "CatBoost",
+  "best_accuracy": 0.9206,
+  "features": [
+    "age",
+    "alcohol_consumption_per_week",
+    "physical_activity_minutes_per_week",
+    "diet_score",
+    "sleep_hours_per_day",
+    "screen_time_hours_per_day",
+    "family_history_diabetes",
+    "hypertension_history",
+    "cardiovascular_history",
+    "bmi",
+    "waist_to_hip_ratio",
+    "systolic_bp",
+    "diastolic_bp",
+    "heart_rate",
+    "cholesterol_total",
+    "hdl_cholesterol",
+    "ldl_cholesterol",
+    "triglycerides",
+    "glucose_fasting",
+    "glucose_postprandial",
+    "insulin_level",
+    "hba1c",
+    "diabetes_risk_score",
+    "gender_Male",
+    "gender_Other",
+    "ethnicity_Black",
+    "ethnicity_Hispanic",
+    "ethnicity_Other",
+    "ethnicity_White",
+    "education_level_Highschool",
+    "education_level_No formal",
+    "education_level_Postgraduate",
+    "income_level_Low",
+    "income_level_Lower-Middle",
+    "income_level_Middle",
+    "income_level_Upper-Middle",
+    "employment_status_Retired",
+    "employment_status_Student",
+    "employment_status_Unemployed",
+    "smoking_status_Former",
+    "smoking_status_Never",
+    "bmi_category",
+    "age_group",
+    "bp_risk",
+    "high_glucose",
+    "prediabetic_glucose",
+    "hba1c_risk"
+  ],
+  "feature_count": 47,
+  "all_results": [
+    {
+      "Model": "CatBoost",
+      "Accuracy": 0.9206,
+      "ROC AUC": 0.9341023880545096,
+      "F1 Score": 0.9291408852927178
+    },
+    {
+      "Model": "LightGBM (Tuned)",
+      "Accuracy": 0.9206,
+      "ROC AUC": 0.9439825303185213,
+      "F1 Score": 0.9291408852927178
+    },
+    {
+      "Model": "Stacking Ensemble",
+      "Accuracy": 0.9206,
+      "ROC AUC": 0.9437084198758758,
+      "F1 Score": 0.9291408852927178
+    },
+    {
+      "Model": "ULTIMATE ENSEMBLE",
+      "Accuracy": 0.9205333333333333,
+      "ROC AUC": 0.9413787993915855,
+      "F1 Score": 0.929085608899994
+    },
+    {
+      "Model": "Voting Ensemble",
+      "Accuracy": 0.9203333333333333,
+      "ROC AUC": 0.9404291637289204,
+      "F1 Score": 0.9289198191767785
+    },
+    {
+      "Model": "XGBoost (Tuned)",
+      "Accuracy": 0.9202333333333333,
+      "ROC AUC": 0.9424373186042855,
+      "F1 Score": 0.9288496417209289
+    },
+    {
+      "Model": "SVM (Optimized)",
+      "Accuracy": 0.9133666666666667,
+      "ROC AUC": 0.9367740152439008,
+      "F1 Score": 0.9222810322657815
+    },
+    {
+      "Model": "Gradient Boosting",
+      "Accuracy": 0.5999666666666666,
+      "ROC AUC": 0.9338296572031779,
+      "F1 Score": 0.7499739577907873
+    }
+  ],
+  "saved_at": "2026-04-08T08:18:26.811080"
+}

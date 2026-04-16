@@ -4,9 +4,11 @@
 import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 20000);
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
+  timeout: API_TIMEOUT_MS,
   headers: { "Content-Type": "application/json" },
 });
 
@@ -16,12 +18,23 @@ export const setLogoutCallback = (cb) => {
   _logoutCallback = cb;
 };
 
+const readStoredUser = () => {
+  const raw = localStorage.getItem("wellnex_user");
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    localStorage.removeItem("wellnex_user");
+    return null;
+  }
+};
+
 // ── Request Interceptor – attach JWT ─────────────────────────
 api.interceptors.request.use(
   (config) => {
-    const stored = localStorage.getItem("wellnex_user");
+    const stored = readStoredUser();
     if (stored) {
-      const { token } = JSON.parse(stored);
+      const { token } = stored;
       if (token) config.headers.Authorization = `Bearer ${token}`;
     }
     return config;

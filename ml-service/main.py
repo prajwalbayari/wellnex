@@ -21,8 +21,12 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
-import tensorflow as tf
-import keras
+try:
+    import tensorflow as tf
+    import keras
+except Exception:
+    tf = None
+    keras = None
 try:
     from catboost import CatBoostClassifier
 except Exception:
@@ -34,54 +38,57 @@ except Exception:
     PdfReader = None
 
 # ── Custom Keras Objects (needed for model loading) ───────────
-@keras.saving.register_keras_serializable()
-class FocalLoss(keras.losses.Loss):
-    """Focal Loss for imbalanced classification."""
+if keras is not None and tf is not None:
+    @keras.saving.register_keras_serializable()
+    class FocalLoss(keras.losses.Loss):
+        """Focal Loss for imbalanced classification."""
 
-    def __init__(self, gamma=2.0, alpha=0.25, **kwargs):
-        self.gamma = gamma
-        self.alpha = alpha
-        self._extra_config = {}
-        for key in list(kwargs.keys()):
-            if key not in ("reduction", "name", "dtype", "fn"):
-                self._extra_config[key] = kwargs.pop(key)
-        super().__init__(**kwargs)
+        def __init__(self, gamma=2.0, alpha=0.25, **kwargs):
+            self.gamma = gamma
+            self.alpha = alpha
+            self._extra_config = {}
+            for key in list(kwargs.keys()):
+                if key not in ("reduction", "name", "dtype", "fn"):
+                    self._extra_config[key] = kwargs.pop(key)
+            super().__init__(**kwargs)
 
-    def call(self, y_true, y_pred):
-        y_pred = tf.cast(y_pred, tf.float32)
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.clip_by_value(y_pred, keras.backend.epsilon(), 1 - keras.backend.epsilon())
-        cross_entropy = -y_true * tf.math.log(y_pred)
-        weight = self.alpha * y_true * tf.math.pow(1 - y_pred, self.gamma)
-        loss = weight * cross_entropy
-        return tf.reduce_mean(tf.reduce_sum(loss, axis=-1))
+        def call(self, y_true, y_pred):
+            y_pred = tf.cast(y_pred, tf.float32)
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.clip_by_value(y_pred, keras.backend.epsilon(), 1 - keras.backend.epsilon())
+            cross_entropy = -y_true * tf.math.log(y_pred)
+            weight = self.alpha * y_true * tf.math.pow(1 - y_pred, self.gamma)
+            loss = weight * cross_entropy
+            return tf.reduce_mean(tf.reduce_sum(loss, axis=-1))
 
-    def get_config(self):
-        config = super().get_config()
-        config.update({"gamma": self.gamma, "alpha": self.alpha})
-        config.update(self._extra_config)
-        return config
-
-
-@keras.saving.register_keras_serializable(package="CustomLayers")
-class DenseNetPreprocessing(keras.layers.Layer):
-    """Model-side preprocessing used by exported DenseNet pipelines."""
-
-    def call(self, inputs):
-        x = tf.cast(inputs, tf.float32)
-        # Inference pipeline feeds [0,1] images; convert to DenseNet expected range.
-        x = x * 255.0
-        return keras.applications.densenet.preprocess_input(x)
-
-    def get_config(self):
-        return super().get_config()
+        def get_config(self):
+            config = super().get_config()
+            config.update({"gamma": self.gamma, "alpha": self.alpha})
+            config.update(self._extra_config)
+            return config
 
 
-CUSTOM_OBJECTS = {
-    "FocalLoss": FocalLoss,
-    "DenseNetPreprocessing": DenseNetPreprocessing,
-    "CustomLayers>DenseNetPreprocessing": DenseNetPreprocessing,
-}
+    @keras.saving.register_keras_serializable(package="CustomLayers")
+    class DenseNetPreprocessing(keras.layers.Layer):
+        """Model-side preprocessing used by exported DenseNet pipelines."""
+
+        def call(self, inputs):
+            x = tf.cast(inputs, tf.float32)
+            # Inference pipeline feeds [0,1] images; convert to DenseNet expected range.
+            x = x * 255.0
+            return keras.applications.densenet.preprocess_input(x)
+
+        def get_config(self):
+            return super().get_config()
+
+
+    CUSTOM_OBJECTS = {
+        "FocalLoss": FocalLoss,
+        "DenseNetPreprocessing": DenseNetPreprocessing,
+        "CustomLayers>DenseNetPreprocessing": DenseNetPreprocessing,
+    }
+else:
+    CUSTOM_OBJECTS = {}
 
 from typing import Any
 
@@ -103,7 +110,7 @@ def _env_threshold(name: str, default: float) -> float:
             return value
     except ValueError:
         pass
-    print(f"⚠️  Invalid {name}={raw!r}. Falling back to {default}.")
+    print(f"[WARN] Invalid {name}={raw!r}. Falling back to {default}.")
     return float(default)
 
 
@@ -132,14 +139,16 @@ def _load_joblib(path: Path):
 
 
 def _load_keras(path: Path):
-    return keras.models.load_model(str(path), custom_objects=CUSTOM_OBJECTS)
+    if keras is None:
+        raise RuntimeError("TensorFlow/Keras is not installed; cannot load Keras model artifacts")
+    return keras.models.load_model(str(path), custom_objects=CUSTOM_OBJECTS, compile=False)
 
 
 def _load_disease(name: str):
     """Load model + any preprocessing artefacts for a given disease."""
     disease_dir = MODEL_DIR / name
     if not disease_dir.is_dir():
-        print(f"⚠️  Model directory not found: {disease_dir}")
+        print(f"[WARN] Model directory not found: {disease_dir}")
         return
 
     art: dict[str, object] = {}
@@ -163,18 +172,18 @@ def _load_disease(name: str):
                 try:
                     model = _load_keras(candidate)
                     loaded_models.append(model)
-                    print(f"  ✅ Loaded {candidate.name}")
+                    print(f"  [OK] Loaded {candidate.name}")
                 except Exception as e:
-                    print(f"  ⚠️  Failed to load {candidate.name}: {e}")
+                    print(f"  [WARN] Failed to load {candidate.name}: {e}")
 
         if not loaded_models:
-            print(f"⚠️  No loadable model files found in {disease_dir}")
+            print(f"[WARN] No loadable model files found in {disease_dir}")
             return
         
         # Store as list for ensemble predictions
         art["models"] = loaded_models  # Multiple models
         art["model"] = loaded_models[0] if len(loaded_models) == 1 else loaded_models  # Fallback
-        print(f"✅  Loaded {name}: {len(loaded_models)} models")
+        print(f"[OK] Loaded {name}: {len(loaded_models)} models")
     elif name == "heart":
         # Prefer FHS ensemble artifacts when available.
         fhs_candidates = {
@@ -199,17 +208,17 @@ def _load_disease(name: str):
                     heart_models["catboost"] = CatBoostClassifier()
                     heart_models["catboost"].load_model(str(fhs_candidates["catboost"]))
                 except Exception as e:
-                    print(f"⚠️  Failed to load catboost_fhs.cbm: {e}")
+                    print(f"[WARN] Failed to load catboost_fhs.cbm: {e}")
             elif fhs_candidates["catboost"].exists():
-                print("⚠️  catboost package not installed; skipping catboost_fhs.cbm")
+                print("[WARN] catboost package not installed; skipping catboost_fhs.cbm")
             for key in ("xgboost", "lightgbm", "randomforest", "stacking"):
                 try:
                     heart_models[key] = _load_joblib(fhs_candidates[key])
                 except Exception as e:
-                    print(f"⚠️  Failed to load {fhs_candidates[key].name}: {e}")
+                    print(f"[WARN] Failed to load {fhs_candidates[key].name}: {e}")
 
             if not any(k in heart_models for k in ("xgboost", "lightgbm", "randomforest", "stacking", "catboost")):
-                print(f"⚠️  No usable FHS heart models loaded from {disease_dir}")
+                print(f"[WARN] No usable FHS heart models loaded from {disease_dir}")
                 return
 
             art["heart_models"] = heart_models
@@ -242,7 +251,7 @@ def _load_disease(name: str):
                 or heart_models.get("randomforest")
                 or heart_models.get("catboost")
             )
-            print("✅  Loaded heart: FHS ensemble bundle")
+            print("[OK] Loaded heart: FHS ensemble bundle")
         else:
             # For diabetes and heart legacy mode: single model files
             model_path = None
@@ -253,15 +262,78 @@ def _load_disease(name: str):
                     break
 
             if model_path is None:
-                print(f"⚠️  No model file in {disease_dir}")
+                print(f"[WARN] No model file in {disease_dir}")
                 return
 
             if model_path.suffix in {".keras", ".h5"}:
                 art["model"] = _load_keras(model_path)
             else:
                 art["model"] = _load_joblib(model_path)
+    elif name == "diabetes":
+        # Prefer Kaggle-exported diabetes artifacts if present.
+        diabetes_model_path = disease_dir / "diabetes_catboost.cbm"
+        if diabetes_model_path.exists() and CatBoostClassifier is not None:
+            cat_model = CatBoostClassifier()
+            cat_model.load_model(str(diabetes_model_path))
+            art["model"] = cat_model
+        elif diabetes_model_path.exists() and CatBoostClassifier is None:
+            print("[WARN] catboost package not installed; cannot load diabetes_catboost.cbm")
+
+        # Legacy/fallback single-model discovery.
+        if "model" not in art:
+            model_path = None
+            for ext in (".pkl", ".joblib", ".keras", ".h5"):
+                candidate = disease_dir / f"model{ext}"
+                if candidate.exists():
+                    model_path = candidate
+                    break
+
+            if model_path is None:
+                # Also allow explicitly named diabetes model fallbacks.
+                for candidate_name in (
+                    "diabetes_lightgbm.pkl",
+                    "diabetes_stacking_ensemble.pkl",
+                    "diabetes_voting_ensemble.pkl",
+                    "diabetes_xgboost.pkl",
+                    "diabetes_svm_optimized.pkl",
+                ):
+                    candidate = disease_dir / candidate_name
+                    if candidate.exists():
+                        model_path = candidate
+                        break
+
+            if model_path is None:
+                print(f"[WARN] No model file in {disease_dir}")
+                return
+
+            if model_path.suffix in {".keras", ".h5"}:
+                art["model"] = _load_keras(model_path)
+            else:
+                art["model"] = _load_joblib(model_path)
+
+        # Prefer explicitly named diabetes preprocessing artifacts.
+        diabetes_artifact_files = {
+            "scaler": ["diabetes_scaler.pkl", "diabetes_scaler.joblib"],
+            "feature_names": ["diabetes_feature_names.pkl", "diabetes_feature_names.joblib"],
+            "feature_stats": ["feature_stats.pkl", "feature_stats.joblib", "diabetes_feature_stats.pkl", "diabetes_feature_stats.joblib"],
+        }
+        for key, candidates in diabetes_artifact_files.items():
+            for candidate_name in candidates:
+                candidate_path = disease_dir / candidate_name
+                if candidate_path.exists():
+                    art[key] = _load_joblib(candidate_path)
+                    break
+
+        # Optional metadata (used for diagnostics/reporting only).
+        metadata_path = disease_dir / "diabetes_model_metadata.json"
+        if metadata_path.exists():
+            try:
+                art["metadata"] = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[WARN] Failed to load diabetes_model_metadata.json: {e}")
+
     else:
-        # For diabetes and heart: single model files
+        # Generic single-model discovery for any additional disease.
         model_path = None
         for ext in (".pkl", ".joblib", ".keras", ".h5"):
             candidate = disease_dir / f"model{ext}"
@@ -270,7 +342,7 @@ def _load_disease(name: str):
                 break
 
         if model_path is None:
-            print(f"⚠️  No model file in {disease_dir}")
+            print(f"[WARN] No model file in {disease_dir}")
             return
 
         if model_path.suffix in {".keras", ".h5"}:
@@ -289,7 +361,7 @@ def _load_disease(name: str):
     models[name] = art.get("models", art.get("model"))  # Store as list or single
     artifacts[name] = art
     art_keys = [k for k in art if k not in ('model', 'models')]
-    print(f"✅  Loaded {name}: model + {art_keys}")
+    print(f"[OK] Loaded {name}: model + {art_keys}")
 
 
 # ── Startup / Shutdown lifespan ───────────────────────────────
@@ -300,7 +372,7 @@ async def lifespan(app: FastAPI):
     print("Starting Wellnex ML Service...")
 
     for name in diseases_to_load:
-        print(f"📦 Loading {name}...")
+        print(f"[LOAD] Loading {name}...")
         _load_disease(name)
     
     print("All active models loaded successfully.")
@@ -312,9 +384,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Wellnex ML Service", version="2.0.0", lifespan=lifespan)
 
+
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS")
+    if not raw:
+        return ["*"]
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return origins or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -896,7 +976,7 @@ def _ensemble_breast_prediction(models_list: list, img: np.ndarray) -> tuple[flo
             all_probs.append(prob)
             model_probs[f"model_{i}"] = round(prob, 4)
         except Exception as e:
-            print(f"⚠️  Model {i} prediction failed: {e}")
+            print(f"[WARN] Model {i} prediction failed: {e}")
             continue
     
     if not all_probs:

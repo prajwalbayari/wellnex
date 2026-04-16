@@ -10,7 +10,16 @@ const PredictionResult = ({ result }) => {
     result.predictionResult || result.summary?.overall_prediction || "No prediction";
   const confidence = Number(result.probability ?? result.summary?.confidence ?? 0);
   const diseaseType = result.diseaseType || result.summary?.likely_disease || "unknown";
-  const isPositive = confidence > 0.7;
+  const normalizedPrediction = String(
+    result.predictionResult || result.summary?.prediction || ""
+  ).toLowerCase();
+  const hasPositiveLabel = normalizedPrediction.includes("positive");
+  const hasNegativeLabel = normalizedPrediction.includes("negative");
+  const isPositive = hasPositiveLabel
+    ? true
+    : hasNegativeLabel
+    ? false
+    : confidence > 0.7;
 
   const modelRows = result.modelResults
     ? Object.entries(result.modelResults)

@@ -10,7 +10,44 @@ import Prediction from "../models/Prediction.js";
 // import { uploadToCloudinary } from "../config/cloudinary.js";
 
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8001";
+const ML_TIMEOUT_MS = Number(process.env.ML_SERVICE_TIMEOUT_MS || 20000);
 const SUPPORTED_DISEASES = ["diabetes", "heart", "breast"];
+
+const _firstDetail = (detail) => {
+  if (!detail) return null;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const head = detail[0];
+    if (typeof head === "string") return head;
+    if (head?.msg) return String(head.msg);
+    return JSON.stringify(head);
+  }
+  if (typeof detail === "object" && detail?.msg) return String(detail.msg);
+  return null;
+};
+
+const _throwMappedMlError = (err, res, fallbackMessage) => {
+  if (axios.isAxiosError(err)) {
+    if (err.code === "ECONNABORTED") {
+      res.status(504);
+      throw new Error("ML service request timed out");
+    }
+
+    if (err.response) {
+      const status = Number(err.response.status || 502);
+      const detail = _firstDetail(err.response.data?.detail);
+      const message = err.response.data?.message || detail || fallbackMessage;
+      res.status(status);
+      throw new Error(String(message));
+    }
+
+    res.status(503);
+    throw new Error("ML service unavailable");
+  }
+
+  res.status(502);
+  throw new Error(fallbackMessage);
+};
 
 // ── Tabular Prediction (Diabetes / Heart) ────────────────────
 /**
@@ -26,11 +63,20 @@ export const predictTabular = asyncHandler(async (req, res) => {
     throw new Error("diseaseType must be 'diabetes' or 'heart'");
   }
 
+  if (!inputData || typeof inputData !== "object" || Array.isArray(inputData)) {
+    res.status(400);
+    throw new Error("inputData must be a JSON object");
+  }
+
   // Forward to ML microservice
-  const mlResponse = await axios.post(
-    `${ML_URL}/predict/${diseaseType}`,
-    inputData
-  );
+  let mlResponse;
+  try {
+    mlResponse = await axios.post(`${ML_URL}/predict/${diseaseType}`, inputData, {
+      timeout: ML_TIMEOUT_MS,
+    });
+  } catch (err) {
+    _throwMappedMlError(err, res, "Failed to get tabular prediction from ML service");
+  }
 
   const { prediction, probability } = mlResponse.data;
 
@@ -72,21 +118,30 @@ export const predictImage = asyncHandler(async (req, res) => {
     contentType: req.file.mimetype,
   });
 
-  const mlResponse = await axios.post(
-    `${ML_URL}/predict/${diseaseType}`,
-    form,
-    { headers: form.getHeaders() }
-  );
+  let mlResponse;
+  try {
+    mlResponse = await axios.post(`${ML_URL}/predict/${diseaseType}`, form, {
+      headers: form.getHeaders(),
+      timeout: ML_TIMEOUT_MS,
+      maxBodyLength: Infinity,
+    });
+  } catch (err) {
+    _throwMappedMlError(err, res, "Failed to get image prediction from ML service");
+  }
 
   const { prediction, probability } = mlResponse.data;
 
-  // Image persistence is intentionally disabled for testing phase.
-  res.status(200).json({
+  // Persist image prediction in history for consistency across model types.
+  const record = await Prediction.create({
+    userId: req.user._id,
     diseaseType,
+    inputData: {},
+    imageUrl: null,
     predictionResult: prediction,
     probability,
-    persisted: false,
   });
+
+  res.status(201).json(record);
 });
 
 // ── Unified Prediction (Any Report Format) ──────────────────
@@ -118,20 +173,24 @@ export const predictUnified = asyncHandler(async (req, res) => {
   });
   form.append("supplemental_data", JSON.stringify(supplementalData));
 
-  const mlResponse = await axios.post(`${ML_URL}/predict/unified`, form, {
-    headers: form.getHeaders(),
-    maxBodyLength: Infinity,
-  });
+  let mlResponse;
+  try {
+    mlResponse = await axios.post(`${ML_URL}/predict/unified`, form, {
+      headers: form.getHeaders(),
+      maxBodyLength: Infinity,
+      timeout: ML_TIMEOUT_MS,
+    });
+  } catch (err) {
+    _throwMappedMlError(err, res, "Failed to get unified prediction from ML service");
+  }
 
   const analysis = mlResponse.data;
   const likelyDisease = analysis?.summary?.likely_disease;
 
   const likelyResult = analysis?.model_results?.[likelyDisease];
-  const isImageUpload = req.file.mimetype?.startsWith("image/");
   const canPersist =
     SUPPORTED_DISEASES.includes(likelyDisease) &&
-    likelyResult?.status === "success" &&
-    !isImageUpload;
+    likelyResult?.status === "success";
 
   let savedPrediction = null;
 
@@ -170,7 +229,7 @@ export const predictUnified = asyncHandler(async (req, res) => {
 export const getHistory = asyncHandler(async (req, res) => {
   const predictions = await Prediction.find({ userId: req.user._id }).sort({
     createdAt: -1,
-  });
+  }).lean();
   res.json(predictions);
 });
 
