@@ -6,6 +6,7 @@ import toast from "react-hot-toast";
 
 import { useAuth } from "../context/AuthContext";
 import UniversalReportUpload from "../components/UniversalReportUpload";
+import ImageUpload from "../components/ImageUpload";
 import MissingFieldsForm from "../components/MissingFieldsForm";
 import DiabetesForm from "../components/DiabetesForm";
 import HeartForm from "../components/HeartForm";
@@ -15,6 +16,7 @@ import Spinner from "../components/Spinner";
 
 import {
   predictTabular,
+  predictImage,
   predictUnified,
   getHistory,
   deletePrediction,
@@ -121,6 +123,22 @@ const Dashboard = () => {
     }
   };
 
+  const handleImageSubmit = async (imageFile) => {
+    setLoading(true);
+    setResult(null);
+
+    try {
+      const data = await predictImage("breast", imageFile);
+      setResult(data);
+      setHistory((prev) => [data, ...prev]);
+      toast.success("Breast image prediction complete!");
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Image prediction failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ── Initial file submission ────────────────────────────────
   const handleInitialUpload = async (file) => {
     setPendingFile(file);
@@ -175,6 +193,17 @@ const Dashboard = () => {
             }`}
           >
             Upload Report
+          </button>
+          <button
+            type="button"
+            onClick={() => setInputMode("image")}
+            className={`px-4 py-2 text-sm rounded-md transition ${
+              inputMode === "image"
+                ? "bg-primary-600 text-white"
+                : "text-gray-600 hover:bg-white"
+            }`}
+          >
+            Breast Image
           </button>
           <button
             type="button"
@@ -238,6 +267,11 @@ const Dashboard = () => {
               onSubmit={handleMissingFieldsSubmit}
             />
           </>
+        ) : inputMode === "image" ? (
+          <div className="rounded-lg border border-gray-200 p-4">
+            <h3 className="text-base font-semibold mb-3">Breast Image Upload</h3>
+            <ImageUpload diseaseType="breast" loading={loading} onSubmit={handleImageSubmit} />
+          </div>
         ) : (
           <div className="space-y-8">
             <div className="rounded-lg border border-gray-200 p-4">

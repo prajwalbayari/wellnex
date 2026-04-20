@@ -7,7 +7,7 @@ import axios from "axios";
 import FormData from "form-data";
 
 import Prediction from "../models/Prediction.js";
-// import { uploadToCloudinary } from "../config/cloudinary.js";
+import { uploadToCloudinary } from "../config/cloudinary.js";
 
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8001";
 const ML_TIMEOUT_MS = Number(process.env.ML_SERVICE_TIMEOUT_MS || 20000);
@@ -47,6 +47,26 @@ const _throwMappedMlError = (err, res, fallbackMessage) => {
 
   res.status(502);
   throw new Error(fallbackMessage);
+};
+
+const _throwMappedCloudinaryError = (err, res) => {
+  if (err?.message?.includes("Missing Cloudinary configuration")) {
+    res.status(500);
+    throw new Error(
+      "Image storage is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET"
+    );
+  }
+
+  res.status(502);
+  throw new Error("Failed to upload image to Cloudinary");
+};
+
+const _uploadImageIfPresent = async (file, folder) => {
+  if (!file?.buffer || !String(file.mimetype || "").startsWith("image/")) {
+    return null;
+  }
+
+  return uploadToCloudinary(file.buffer, folder);
 };
 
 // ── Tabular Prediction (Diabetes / Heart) ────────────────────
@@ -111,6 +131,13 @@ export const predictImage = asyncHandler(async (req, res) => {
     throw new Error("Image file is required");
   }
 
+  let cloudinaryUpload = null;
+  try {
+    cloudinaryUpload = await _uploadImageIfPresent(req.file, "wellnex/breast");
+  } catch (err) {
+    _throwMappedCloudinaryError(err, res);
+  }
+
   // Forward image buffer to ML microservice as multipart
   const form = new FormData();
   form.append("file", req.file.buffer, {
@@ -136,12 +163,21 @@ export const predictImage = asyncHandler(async (req, res) => {
     userId: req.user._id,
     diseaseType,
     inputData: {},
-    imageUrl: null,
+    imageUrl: cloudinaryUpload?.secure_url || null,
+    imagePublicId: cloudinaryUpload?.public_id || null,
     predictionResult: prediction,
     probability,
   });
 
-  res.status(201).json(record);
+  res.status(201).json({
+    ...record.toObject(),
+    uploadedImage: cloudinaryUpload
+      ? {
+          url: cloudinaryUpload.secure_url,
+          publicId: cloudinaryUpload.public_id,
+        }
+      : null,
+  });
 });
 
 // ── Unified Prediction (Any Report Format) ──────────────────
@@ -186,6 +222,16 @@ export const predictUnified = asyncHandler(async (req, res) => {
 
   const analysis = mlResponse.data;
   const likelyDisease = analysis?.summary?.likely_disease;
+  const isImageReport = String(req.file.mimetype || "").startsWith("image/");
+
+  let cloudinaryUpload = null;
+  if (isImageReport) {
+    try {
+      cloudinaryUpload = await _uploadImageIfPresent(req.file, "wellnex/reports");
+    } catch (err) {
+      _throwMappedCloudinaryError(err, res);
+    }
+  }
 
   const likelyResult = analysis?.model_results?.[likelyDisease];
   const canPersist =
@@ -208,7 +254,8 @@ export const predictUnified = asyncHandler(async (req, res) => {
       userId: req.user._id,
       diseaseType: likelyDisease,
       inputData,
-      imageUrl: null,
+      imageUrl: cloudinaryUpload?.secure_url || null,
+      imagePublicId: cloudinaryUpload?.public_id || null,
       predictionResult,
       probability: confidence,
     });

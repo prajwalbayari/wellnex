@@ -19,7 +19,7 @@ import authRoutes from "./routes/authRoutes.js";
 import predictionRoutes from "./routes/predictionRoutes.js";
 import { notFound, errorHandler } from "./middleware/errorMiddleware.js";
 
-// Initialize Cloudinary if configured. Image prediction does not depend on it.
+// Initialize Cloudinary if configured. Image routes will require it at request time.
 try {
   ensureConfigured();
 } catch (error) {
@@ -34,7 +34,7 @@ const app = express();
 // ── Global Middleware ────────────────────────────────────────
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
-  : ["http://localhost:5173"];
+  : ["http://localhost:5173", "http://localhost:3000"];
 
 app.use(
   cors({

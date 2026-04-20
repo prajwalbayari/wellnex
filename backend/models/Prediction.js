@@ -23,6 +23,10 @@ const predictionSchema = new mongoose.Schema(
       type: String, // Cloudinary secure_url (for image-based predictions)
       default: null,
     },
+    imagePublicId: {
+      type: String, // Cloudinary public_id for optional cleanup/auditing
+      default: null,
+    },
     predictionResult: {
       type: String, // "Positive" | "Negative"
       required: true,

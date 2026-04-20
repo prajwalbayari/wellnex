@@ -156,12 +156,12 @@ ML_SERVICE_URL=http://localhost:8001
 
 Recommended:
 ```env
-CORS_ORIGIN=http://localhost:5173
+CORS_ORIGIN=http://localhost:5173,http://localhost:3000
 ML_SERVICE_TIMEOUT_MS=20000
 RATE_LIMIT_MAX=300
 ```
 
-Optional (only if Cloudinary uploads are used):
+Required for image uploads (`/predictions/image`) and image report history:
 ```env
 CLOUDINARY_CLOUD_NAME=<cloud_name>
 CLOUDINARY_API_KEY=<api_key>
