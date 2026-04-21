@@ -32,14 +32,41 @@ await connectDB();
 const app = express();
 
 // ── Global Middleware ────────────────────────────────────────
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
-  : ["http://localhost:5173", "http://localhost:3000"];
+const normalizeOrigin = (origin = "") => origin.trim().replace(/\/$/, "");
+
+const configuredOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => normalizeOrigin(origin)).filter(Boolean)
+  : [];
+
+const defaultOrigins = ["http://localhost:5173", "http://localhost:3000"];
+const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
+
+const toWildcardRegex = (originPattern) => {
+  if (!originPattern.includes("*")) return null;
+  const escaped = originPattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+};
+
+const wildcardOriginRegexes = allowedOrigins.map(toWildcardRegex).filter(Boolean);
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      // Allow non-browser clients and same-origin requests.
+      if (!origin) return callback(null, true);
+
+      const normalized = normalizeOrigin(origin);
+      const exactMatch = allowedOrigins.includes(normalized);
+      const wildcardMatch = wildcardOriginRegexes.some((regex) => regex.test(normalized));
+
+      if (exactMatch || wildcardMatch) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     credentials: true,
+    optionsSuccessStatus: 204,
   })
 );
 app.use(helmet());
