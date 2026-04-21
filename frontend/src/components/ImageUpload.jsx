@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// ImageUpload – reusable image upload component for breast scans
+// ImageUpload – reusable image upload component for CT scan images
 // ─────────────────────────────────────────────────────────────
 import { useState, useRef, useEffect } from "react";
 import { FiUploadCloud, FiX } from "react-icons/fi";
@@ -38,7 +38,7 @@ const ImageUpload = ({ diseaseType, onSubmit, loading }) => {
   };
 
   const labels = {
-    breast: { title: "Breast Cancer Image", desc: "Upload a histopathology image" },
+    breast: { title: "CT scan image", desc: "Upload a CT scan image" },
   };
 
   const { title, desc } = labels[diseaseType] || labels.breast;

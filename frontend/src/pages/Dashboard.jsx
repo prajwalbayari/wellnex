@@ -131,7 +131,7 @@ const Dashboard = () => {
       const data = await predictImage("breast", imageFile);
       setResult(data);
       setHistory((prev) => [data, ...prev]);
-      toast.success("Breast image prediction complete!");
+      toast.success("CT scan image prediction complete!");
     } catch (err) {
       toast.error(err.response?.data?.message || "Image prediction failed");
     } finally {
@@ -203,7 +203,7 @@ const Dashboard = () => {
                 : "text-gray-600 hover:bg-white"
             }`}
           >
-            Breast Image
+            CT Scan Image
           </button>
           <button
             type="button"
@@ -269,7 +269,7 @@ const Dashboard = () => {
           </>
         ) : inputMode === "image" ? (
           <div className="rounded-lg border border-gray-200 p-4">
-            <h3 className="text-base font-semibold mb-3">Breast Image Upload</h3>
+            <h3 className="text-base font-semibold mb-3">CT Scan Image Upload</h3>
             <ImageUpload diseaseType="breast" loading={loading} onSubmit={handleImageSubmit} />
           </div>
         ) : (

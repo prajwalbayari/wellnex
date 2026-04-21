@@ -26,7 +26,7 @@ const features = [
   {
     icon: FiTarget,
     title: "Breast Cancer Screening",
-    desc: "Histopathology image analysis for breast cancer classification.",
+    desc: "CT scan image analysis for breast cancer classification.",
     color: "text-pink-600 bg-pink-50",
   },
 ];

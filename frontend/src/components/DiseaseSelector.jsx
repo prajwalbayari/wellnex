@@ -23,7 +23,7 @@ const diseases = [
     label: "Breast Cancer",
     icon: FiTarget,
     color: "text-pink-600 bg-pink-100",
-    description: "Analyse histopathology images",
+    description: "Analyse CT scan images",
   },
 ];
 
