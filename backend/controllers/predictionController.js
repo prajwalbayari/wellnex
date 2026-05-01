@@ -10,7 +10,8 @@ import Prediction from "../models/Prediction.js";
 import { uploadToCloudinary } from "../config/cloudinary.js";
 
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8001";
-const ML_TIMEOUT_MS = Number(process.env.ML_SERVICE_TIMEOUT_MS || 20000);
+// If ML_SERVICE_TIMEOUT_MS is set to 0, timeout will be disabled (no timeout).
+const ML_TIMEOUT_MS = Number(process.env.ML_SERVICE_TIMEOUT_MS ?? 20000);
 const SUPPORTED_DISEASES = ["diabetes", "heart", "breast"];
 
 const _firstDetail = (detail) => {
@@ -91,9 +92,10 @@ export const predictTabular = asyncHandler(async (req, res) => {
   // Forward to ML microservice
   let mlResponse;
   try {
-    mlResponse = await axios.post(`${ML_URL}/predict/${diseaseType}`, inputData, {
-      timeout: ML_TIMEOUT_MS,
-    });
+    const axiosConfig = {};
+    if (ML_TIMEOUT_MS > 0) axiosConfig.timeout = ML_TIMEOUT_MS;
+
+    mlResponse = await axios.post(`${ML_URL}/predict/${diseaseType}`, inputData, axiosConfig);
   } catch (err) {
     _throwMappedMlError(err, res, "Failed to get tabular prediction from ML service");
   }
@@ -147,11 +149,13 @@ export const predictImage = asyncHandler(async (req, res) => {
 
   let mlResponse;
   try {
-    mlResponse = await axios.post(`${ML_URL}/predict/${diseaseType}`, form, {
+    const axiosConfig = {
       headers: form.getHeaders(),
-      timeout: ML_TIMEOUT_MS,
       maxBodyLength: Infinity,
-    });
+    };
+    if (ML_TIMEOUT_MS > 0) axiosConfig.timeout = ML_TIMEOUT_MS;
+
+    mlResponse = await axios.post(`${ML_URL}/predict/${diseaseType}`, form, axiosConfig);
   } catch (err) {
     _throwMappedMlError(err, res, "Failed to get image prediction from ML service");
   }
@@ -211,11 +215,13 @@ export const predictUnified = asyncHandler(async (req, res) => {
 
   let mlResponse;
   try {
-    mlResponse = await axios.post(`${ML_URL}/predict/unified`, form, {
+    const axiosConfig = {
       headers: form.getHeaders(),
       maxBodyLength: Infinity,
-      timeout: ML_TIMEOUT_MS,
-    });
+    };
+    if (ML_TIMEOUT_MS > 0) axiosConfig.timeout = ML_TIMEOUT_MS;
+
+    mlResponse = await axios.post(`${ML_URL}/predict/unified`, form, axiosConfig);
   } catch (err) {
     _throwMappedMlError(err, res, "Failed to get unified prediction from ML service");
   }

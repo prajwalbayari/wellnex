@@ -157,6 +157,8 @@ ML_SERVICE_URL=http://localhost:8001
 Recommended:
 ```env
 CORS_ORIGIN=http://localhost:5173,http://localhost:3000
+# ML service request timeout in milliseconds.
+# Set to 0 to disable the client-side timeout (requests will wait indefinitely).
 ML_SERVICE_TIMEOUT_MS=20000
 RATE_LIMIT_MAX=300
 ```
