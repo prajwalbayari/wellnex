@@ -1399,6 +1399,19 @@ async def predict_breast(file: UploadFile = File(...)):
 
     # Ensemble prediction: average probability across all models
     raw_prob, model_probs = _ensemble_breast_prediction(models_list, img)
+    # Debug logging: record input stats and per-model probabilities to help diagnose
+    try:
+        img_arr = np.asarray(img)
+        img_stats = {
+            "min": float(np.min(img_arr)),
+            "max": float(np.max(img_arr)),
+            "mean": float(np.mean(img_arr)),
+            "std": float(np.std(img_arr)),
+            "shape": tuple(img_arr.shape),
+        }
+    except Exception:
+        img_stats = {"shape": str(getattr(img, 'shape', 'unknown'))}
+    print(f"[DEBUG] breast prediction: models_count={len(models_list) if isinstance(models_list, list) else 1}, img_stats={img_stats}, raw_prob={raw_prob}, model_probs={model_probs}")
     prob = _calibrate_breast_probability(raw_prob)
     label, _ = _breast_labels(prob)
 
