@@ -93,7 +93,39 @@ else:
 from typing import Any
 
 # ── Configuration ─────────────────────────────────────────────
-MODEL_DIR = Path(os.getenv("MODEL_DIR", "./models"))
+def _resolve_model_dir() -> Path:
+    """Resolve model directory with multiple fallback paths."""
+    # Try explicit environment variable first
+    if env_path := os.getenv("MODEL_DIR"):
+        model_dir = Path(env_path)
+        if model_dir.is_dir():
+            return model_dir
+        print(f"[WARN] Configured MODEL_DIR not found: {model_dir}")
+    
+    # Try relative path from current working directory
+    relative = Path("./models")
+    if relative.is_dir():
+        print(f"[OK] Using relative model path: {relative.resolve()}")
+        return relative
+    
+    # Try relative to this script
+    script_dir = Path(__file__).parent
+    script_relative = script_dir / "models"
+    if script_relative.is_dir():
+        print(f"[OK] Using script-relative model path: {script_relative.resolve()}")
+        return script_relative
+    
+    # Try one level up (for hf-space-wellnex structure)
+    parent_relative = Path(__file__).parent.parent / "models"
+    if parent_relative.is_dir():
+        print(f"[OK] Using parent-relative model path: {parent_relative.resolve()}")
+        return parent_relative
+    
+    # Fallback to default
+    print(f"[WARN] No model directory found; using default: {relative.resolve()}")
+    return relative
+
+MODEL_DIR = _resolve_model_dir()
 
 # Global registries – populated at startup
 models: dict[str, Any] = {}
@@ -183,6 +215,12 @@ def _load_disease(name: str):
         # Store as list for ensemble predictions
         art["models"] = loaded_models  # Multiple models
         art["model"] = loaded_models[0] if len(loaded_models) == 1 else loaded_models  # Fallback
+        metadata_path = disease_dir / "breast_cancer_model_metadata.json"
+        if metadata_path.exists():
+            try:
+                art["metadata"] = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[WARN] Failed to load breast_cancer_model_metadata.json: {e}")
         print(f"[OK] Loaded {name}: {len(loaded_models)} models")
     elif name == "heart":
         # Prefer FHS ensemble artifacts when available.
@@ -570,7 +608,7 @@ DIABETES_ALIASES: dict[str, list[str]] = {
     "diastolic_bp": ["diastolic bp", "diastolic blood pressure", "dbp"],
     "heart_rate": ["heart rate", "pulse"],
     "glucose_fasting": ["fasting glucose", "glucose fasting", "fbs", "fasting blood sugar"],
-    "glucose_postprandial": ["postprandial glucose", "post meal glucose", "pp glucose"],
+    "glucose_postprandial": ["postprandial glucose", "post-prandial glucose", "post prandial glucose", "post meal glucose", "pp glucose"],
     "insulin_level": ["insulin", "insulin level"],
     "hba1c": ["hba1c", "hb a1c", "a1c"],
     "cholesterol_total": ["total cholesterol", "cholesterol total", "total chol"],
@@ -723,14 +761,73 @@ def _calibrate_breast_probability(raw_prob: float) -> float:
     return float(np.clip(calibrated, 0.0, 1.0))
 
 
-def _breast_labels(probability: float) -> tuple[str, str]:
-    is_malignant = probability >= BREAST_CANCER_THRESHOLD
+def _calibrate_tabular_probability(raw_prob: float, disease: str = "diabetes") -> float:
+    """
+    Calibrate tabular model confidence for better separation from 0.5 boundary.
+    Improves weak predictions by temperature scaling and stretching.
+    """
+    p = float(np.clip(raw_prob, 1e-6, 1 - 1e-6))
+    
+    # Apply temperature scaling to spread probabilities away from 0.5
+    # Higher temperature spreads weak predictions more
+    temperature = 1.5 if disease == "diabetes" else 1.3
+    logit = np.log(p / (1 - p))
+    temp_scaled = 1.0 / (1.0 + np.exp(-(logit / temperature)))
+    
+    # Blend with original to maintain ranking while improving calibration
+    blend_ratio = 0.4  # 40% temperature scaled, 60% original
+    calibrated = (1 - blend_ratio) * p + blend_ratio * temp_scaled
+    
+    # Apply stretching to move predictions away from boundary
+    # Maps probabilities closer to 0 or 1
+    if calibrated < 0.5:
+        # Pull weak negatives down further
+        calibrated = calibrated * 0.85
+    else:
+        # Pull weak positives up further  
+        calibrated = 0.5 + (calibrated - 0.5) * 1.15
+    
+    return float(np.clip(calibrated, 0.0, 1.0))
+
+
+def _breast_labels(probability: float, threshold: float | None = None) -> tuple[str, str]:
+    effective_threshold = BREAST_CANCER_THRESHOLD if threshold is None else float(threshold)
+    is_malignant = probability >= effective_threshold
     if is_malignant:
         return "Positive", "Malignant"
     return "Negative", "Benign"
 
 
+def _report_lines(text: str) -> list[str]:
+    normalized = text.replace("\r", "\n").replace("|", "\n")
+    lines = []
+    for raw_line in normalized.split("\n"):
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
 def _extract_number(text: str, aliases: list[str]) -> float | None:
+    lines = _report_lines(text)
+    alias_patterns = [_alias_to_pattern(alias) for alias in aliases]
+
+    for line_index, line in enumerate(lines):
+        for pattern in alias_patterns:
+            if not pattern:
+                continue
+            match_alias = re.search(rf"\b{pattern}\b", line, flags=re.IGNORECASE)
+            if match_alias:
+                window_parts = [line[match_alias.end():]]
+                window_parts.extend(lines[line_index + 1: line_index + 4])
+                window = " ".join(part for part in window_parts if part)
+                match = re.search(r"(-?\d+(?:\.\d+)?)", window)
+                if match:
+                    try:
+                        return float(match.group(1))
+                    except ValueError:
+                        pass
+
     for alias in aliases:
         label = _alias_to_pattern(alias)
         match = re.search(rf"{label}[^\d\-]*(-?\d+(?:\.\d+)?)", text, flags=re.IGNORECASE)
@@ -743,6 +840,26 @@ def _extract_number(text: str, aliases: list[str]) -> float | None:
 
 
 def _extract_binary(text: str, aliases: list[str]) -> float | None:
+    lines = _report_lines(text)
+    alias_patterns = [_alias_to_pattern(alias) for alias in aliases]
+
+    for line_index, line in enumerate(lines):
+        for pattern in alias_patterns:
+            if not pattern:
+                continue
+            match_alias = re.search(rf"\b{pattern}\b", line, flags=re.IGNORECASE)
+            if match_alias:
+                window_parts = [line[match_alias.end():]]
+                window_parts.extend(lines[line_index + 1: line_index + 4])
+                window = " ".join(part for part in window_parts if part)
+                match = re.search(
+                    r"(yes|no|true|false|positive|negative|present|absent|1|0)",
+                    window,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    return _coerce_binary(match.group(1))
+
     for alias in aliases:
         label = _alias_to_pattern(alias)
         match = re.search(
@@ -757,6 +874,22 @@ def _extract_binary(text: str, aliases: list[str]) -> float | None:
 
 def _extract_choice(text: str, field: str, aliases: list[str]) -> str | None:
     synonyms = CHOICE_SYNONYMS.get(field, {})
+    lines = _report_lines(text)
+    alias_patterns = [_alias_to_pattern(alias) for alias in aliases]
+
+    for line_index, line in enumerate(lines):
+        for pattern in alias_patterns:
+            if not pattern:
+                continue
+            match_alias = re.search(rf"\b{pattern}\b", line, flags=re.IGNORECASE)
+            if match_alias:
+                window_parts = [line[match_alias.end():]]
+                window_parts.extend(lines[line_index + 1: line_index + 4])
+                window = " ".join(part for part in window_parts if part)
+                for key, canonical in synonyms.items():
+                    if re.search(rf"\b{_alias_to_pattern(key)}\b", window, flags=re.IGNORECASE):
+                        return canonical
+
     for alias in aliases:
         label = _alias_to_pattern(alias)
         for key, canonical in synonyms.items():
@@ -799,26 +932,64 @@ def _extract_text_from_file(file_bytes: bytes, filename: str | None, content_typ
     safe_name = (filename or "").lower()
     safe_type = (content_type or "").lower()
 
-    if ("pdf" in safe_type or safe_name.endswith(".pdf")) and PdfReader is not None:
+    # Try PDF extraction first
+    if ("pdf" in safe_type or safe_name.endswith(".pdf")):
+        # Try pypdf first
+        if PdfReader is not None:
+            try:
+                reader = PdfReader(io.BytesIO(file_bytes))
+                pages = []
+                for page in reader.pages[:20]:
+                    extracted = page.extract_text()
+                    if extracted:
+                        pages.append(extracted)
+                text = "\n".join(pages).strip()
+                if text:
+                    print(f"[DEBUG] PDF extraction successful with pypdf; extracted {len(text)} chars from {len(pages)} pages")
+                    return text
+                print(f"[DEBUG] PDF extracted but empty; trying fallback")
+            except Exception as e:
+                print(f"[WARN] pypdf extraction failed: {e}; trying fallback")
+        
+        # Try PyMuPDF as fallback
         try:
-            reader = PdfReader(io.BytesIO(file_bytes))
-            pages = [(page.extract_text() or "") for page in reader.pages[:20]]
+            import fitz
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            pages = []
+            for page_num in range(min(20, doc.page_count)):
+                page = doc[page_num]
+                text = page.get_text()
+                if text:
+                    pages.append(text)
+            doc.close()
             text = "\n".join(pages).strip()
             if text:
+                print(f"[DEBUG] PDF extraction successful with PyMuPDF; extracted {len(text)} chars from {len(pages)} pages")
                 return text
-        except Exception:
-            pass
+            print(f"[DEBUG] PyMuPDF extracted but empty")
+        except ImportError:
+            print(f"[WARN] PyMuPDF not installed; skipping PDF fallback")
+        except Exception as e:
+            print(f"[WARN] PyMuPDF extraction failed: {e}")
 
+    # Try DOCX extraction
     if safe_name.endswith(".docx"):
         docx_text = _extract_text_from_docx(file_bytes)
         if docx_text:
+            print(f"[DEBUG] DOCX extraction successful; extracted {len(docx_text)} chars")
             return docx_text
 
+    # Try text-based formats
     if safe_type.startswith("text/") or safe_name.endswith((".txt", ".csv", ".json", ".xml", ".md", ".yaml", ".yml", ".tsv")):
-        return _decode_text_bytes(file_bytes)
+        text = _decode_text_bytes(file_bytes)
+        if text:
+            print(f"[DEBUG] Text extraction successful; extracted {len(text)} chars")
+            return text
 
-    # Best-effort fallback for unknown file types.
+    # Best-effort fallback
+    print(f"[WARN] No specific extractor matched; using generic fallback")
     return _decode_text_bytes(file_bytes)
+
 
 
 def _extract_inputs_from_text(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -861,6 +1032,166 @@ def _infer_tabular_intent(diabetes_raw: dict[str, Any], heart_raw: dict[str, Any
     if h_score >= max(4, d_score + 2):
         return "heart"
     return "both"
+
+
+def _detect_report_intent(text: str) -> str:
+    lowered = text.lower()
+
+    heart_keywords = (
+        "ejection fraction",
+        "troponin",
+        "b-type natriuretic peptide",
+        "bnp",
+        "ecg",
+        "echocardiography",
+        "cardiomyopathy",
+        "heart failure",
+        "myocardial",
+        "cardiac",
+    )
+    diabetes_keywords = (
+        "hba1c",
+        "fasting blood sugar",
+        "fasting glucose",
+        "post-prandial glucose",
+        "post prandial glucose",
+        "insulin level",
+        "glycemic",
+        "diabetes mellitus",
+        "glucose",
+    )
+
+    heart_score = sum(1 for keyword in heart_keywords if keyword in lowered)
+    diabetes_score = sum(1 for keyword in diabetes_keywords if keyword in lowered)
+
+    if heart_score >= diabetes_score + 2:
+        return "heart"
+    if diabetes_score >= heart_score + 2:
+        return "diabetes"
+    if heart_score > 0 and diabetes_score == 0:
+        return "heart"
+    if diabetes_score > 0 and heart_score == 0:
+        return "diabetes"
+    return "both" if heart_score or diabetes_score else "none"
+
+
+def _heart_report_evidence_probability(text: str) -> float:
+    lowered = text.lower()
+    score = 0.0
+
+    def _first_number(pattern: str) -> float | None:
+        match = re.search(pattern, lowered, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    ef = _first_number(r"ejection fraction[\s:\-]*([0-9]{1,3}(?:\.[0-9]+)?)")
+    troponin = _first_number(r"troponin(?: i)?[\s:\-]*([0-9]+(?:\.[0-9]+)?)")
+    bnp = _first_number(r"(?:b-type natriuretic peptide|\bbnp\b)[\s:\-]*([0-9]+(?:\.[0-9]+)?)")
+    systolic = _first_number(r"systolic bp[\s:\-]*([0-9]{2,3}(?:\.[0-9]+)?)")
+    diastolic = _first_number(r"diastolic bp[\s:\-]*([0-9]{2,3}(?:\.[0-9]+)?)")
+    heart_rate = _first_number(r"heart rate[\s:\-]*([0-9]{2,3}(?:\.[0-9]+)?)")
+
+    if ef is not None:
+        if ef <= 40:
+            score += 0.28
+        elif ef <= 50:
+            score += 0.14
+
+    if troponin is not None:
+        if troponin >= 0.3:
+            score += 0.22
+        elif troponin >= 0.04:
+            score += 0.12
+
+    if bnp is not None:
+        if bnp >= 500:
+            score += 0.18
+        elif bnp >= 100:
+            score += 0.08
+
+    if systolic is not None and systolic >= 140:
+        score += 0.08
+    if diastolic is not None and diastolic >= 90:
+        score += 0.08
+    if heart_rate is not None and heart_rate >= 100:
+        score += 0.08
+
+    positive_indicators = (
+        "heart failure",
+        "myocardial",
+        "cardiomyopathy",
+        "reduced contractility",
+        "reduced ejection fraction",
+        "st segment depression",
+        "t wave inversion",
+        "abnormal ecg",
+        "elevated cardiac",
+        "urgent cardiology",
+    )
+    negative_indicators = (
+        "no evidence of heart disease",
+        "no evidence of cardiac",
+        "normal echocardiography",
+        "normal ecg",
+        "no acute cardiac",
+        "within normal limits",
+    )
+
+    if any(keyword in lowered for keyword in positive_indicators):
+        score += 0.22
+    if any(keyword in lowered for keyword in negative_indicators):
+        score -= 0.14
+
+    return float(np.clip(0.03 + score, 0.0, 0.98))
+
+
+def _diabetes_report_evidence_probability(text: str) -> float:
+    lowered = text.lower()
+    score = 0.0
+
+    def _first_number(pattern: str) -> float | None:
+        match = re.search(pattern, lowered, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    fasting = _first_number(r"(?:fasting blood sugar|fasting glucose|fbs)[\s:\-]*([0-9]+(?:\.[0-9]+)?)")
+    postprandial = _first_number(r"(?:post-prandial glucose|post prandial glucose|postprandial glucose|pp glucose)[\s:\-]*([0-9]+(?:\.[0-9]+)?)")
+    hba1c = _first_number(r"(?:hba1c|hb a1c|a1c)[\s:\-]*([0-9]+(?:\.[0-9]+)?)")
+    insulin = _first_number(r"insulin(?: level)?[\s:\-]*([0-9]+(?:\.[0-9]+)?)")
+
+    if fasting is not None:
+        if fasting >= 126:
+            score += 0.26
+        elif fasting >= 100:
+            score += 0.12
+
+    if postprandial is not None:
+        if postprandial >= 200:
+            score += 0.16
+        elif postprandial >= 140:
+            score += 0.08
+
+    if hba1c is not None:
+        if hba1c >= 8.0:
+            score += 0.32
+        elif hba1c >= 6.5:
+            score += 0.18
+
+    if insulin is not None and insulin >= 20:
+        score += 0.06
+
+    if any(keyword in lowered for keyword in ("diabetes mellitus", "glycemic control", "prediabetes")):
+        score += 0.12
+
+    return float(np.clip(0.05 + score, 0.0, 0.98))
 
 
 def _apply_supplemental_inputs(
@@ -1054,10 +1385,19 @@ def _heart_probability(model: Any, art: dict, X: np.ndarray) -> tuple[float, dic
     return prob, {"model": round(prob, 4)}
 
 
-def _preprocess_image(file_bytes: bytes, target_size: tuple[int, int] = (224, 224)) -> np.ndarray:
+def _preprocess_image(file_bytes: bytes, target_size: tuple[int, int] = (224, 224), preprocess_mode: str = "resnet50") -> np.ndarray:
     img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
     img = img.resize(target_size)
-    arr = np.array(img, dtype=np.float32) / 255.0
+
+    arr = np.array(img, dtype=np.float32)
+    if preprocess_mode == "resnet50":
+        try:
+            arr = keras.applications.resnet50.preprocess_input(arr)
+        except Exception:
+            arr = arr / 255.0
+    else:
+        arr = arr / 255.0
+
     return np.expand_dims(arr, axis=0)
 
 
@@ -1373,6 +1713,11 @@ async def predict_diabetes(data: DiabetesInput):
         prob = float(model.predict_proba(X)[0][1])
     else:
         prob = float(model.predict(X)[0])
+    
+    # Clip to valid range and apply calibration
+    prob = float(np.clip(prob, 0.0, 1.0))
+    prob = _calibrate_tabular_probability(prob, disease="diabetes")
+    
     threshold = _threshold_for_disease("diabetes")
     label = "Positive" if prob >= threshold else "Negative"
     return PredictionResult(prediction=label, probability=round(prob, 4))
@@ -1383,6 +1728,10 @@ async def predict_heart(data: HeartInput):
     model, art = _ensure("heart")
     X = _heart_preprocess(data, art)
     prob, _ = _heart_probability(model, art, X)
+    
+    # Calibrate probability for better confidence separation
+    prob = _calibrate_tabular_probability(prob, disease="heart")
+    
     threshold = _threshold_for_disease("heart")
     label = "Positive" if prob >= threshold else "Negative"
     return PredictionResult(prediction=label, probability=round(prob, 4))
@@ -1395,7 +1744,7 @@ async def predict_breast(file: UploadFile = File(...)):
     contents = await file.read()
     primary_model = models_list[0] if isinstance(models_list, list) else models_list
     target_size = _target_size_from_model(primary_model, fallback=(160, 160))
-    img = _preprocess_image(contents, target_size=target_size)
+    img = _preprocess_image(contents, target_size=target_size, preprocess_mode="resnet50")
 
     # Ensemble prediction: average probability across all models
     raw_prob, model_probs = _ensemble_breast_prediction(models_list, img)
@@ -1413,7 +1762,8 @@ async def predict_breast(file: UploadFile = File(...)):
         img_stats = {"shape": str(getattr(img, 'shape', 'unknown'))}
     print(f"[DEBUG] breast prediction: models_count={len(models_list) if isinstance(models_list, list) else 1}, img_stats={img_stats}, raw_prob={raw_prob}, model_probs={model_probs}")
     prob = _calibrate_breast_probability(raw_prob)
-    label, _ = _breast_labels(prob)
+    threshold = float(art.get("metadata", {}).get("decision_threshold", BREAST_CANCER_THRESHOLD))
+    label, _ = _breast_labels(prob, threshold=threshold)
 
     return PredictionResult(prediction=label, probability=round(prob, 4))
 
@@ -1445,6 +1795,10 @@ async def predict_unified(
     diabetes_raw, heart_raw = _extract_inputs_from_text(extracted_text)
     _apply_supplemental_inputs(diabetes_raw, heart_raw, supplemental)
     tabular_intent = _infer_tabular_intent(diabetes_raw, heart_raw)
+    report_intent = _detect_report_intent(extracted_text)
+
+    if report_intent in {"diabetes", "heart"} and tabular_intent == "both":
+        tabular_intent = report_intent
 
     if is_real_image:
         tabular_intent = "none"
@@ -1465,6 +1819,9 @@ async def predict_unified(
         "heart": missing_heart,
     }
 
+    diabetes_signal = _count_populated(diabetes_raw, DIABETES_REQUIRED_FIELDS)
+    heart_signal = _count_populated(heart_raw, HEART_REQUIRED_FIELDS)
+
     diabetes_input = _build_resolved_inputs(diabetes_raw, DIABETES_DEFAULTS)
     heart_input = _build_resolved_inputs(heart_raw, HEART_DEFAULTS)
 
@@ -1481,7 +1838,7 @@ async def predict_unified(
             "status": "skipped",
             "reason": "Input report appears heart-focused.",
         }
-    elif missing_fields["diabetes"]:
+    elif diabetes_signal == 0:
         model_results["diabetes"] = {
             "status": "needs_input",
             "missing_fields": missing_fields["diabetes"],
@@ -1494,6 +1851,14 @@ async def predict_unified(
                 d_prob = float(d_model.predict_proba(d_arr)[0][1])
             else:
                 d_prob = float(d_model.predict(d_arr)[0])
+            if report_intent in {"diabetes", "both"}:
+                evidence_prob = _diabetes_report_evidence_probability(extracted_text)
+                d_prob = max(d_prob, evidence_prob)
+            # Calibrate tabular probability for consistent confidence behavior
+            try:
+                d_prob = _calibrate_tabular_probability(float(d_prob), disease="diabetes")
+            except Exception:
+                d_prob = float(np.clip(d_prob, 0.0, 1.0))
             d_threshold = _threshold_for_disease("diabetes")
             d_label = "Positive" if d_prob >= d_threshold else "Negative"
             model_results["diabetes"] = {
@@ -1520,7 +1885,7 @@ async def predict_unified(
             "status": "skipped",
             "reason": "Input report appears diabetes-focused.",
         }
-    elif missing_fields["heart"]:
+    elif heart_signal == 0:
         model_results["heart"] = {
             "status": "needs_input",
             "missing_fields": missing_fields["heart"],
@@ -1530,6 +1895,14 @@ async def predict_unified(
             h_model, h_art = _ensure("heart")
             h_arr = _heart_preprocess(HeartInput(**heart_input), h_art)
             h_prob, h_components = _heart_probability(h_model, h_art, h_arr)
+            if report_intent in {"heart", "both"}:
+                evidence_prob = _heart_report_evidence_probability(extracted_text)
+                h_prob = max(h_prob, evidence_prob)
+            # Calibrate tabular probability for consistent confidence behavior
+            try:
+                h_prob = _calibrate_tabular_probability(float(h_prob), disease="heart")
+            except Exception:
+                h_prob = float(np.clip(h_prob, 0.0, 1.0))
             h_threshold = _threshold_for_disease("heart")
             h_label = "Positive" if h_prob >= h_threshold else "Negative"
             model_results["heart"] = {
@@ -1560,10 +1933,11 @@ async def predict_unified(
             breast_models, breast_art = _ensure("breast")
             breast_primary_model = breast_models[0] if isinstance(breast_models, list) else breast_models
             breast_target_size = _target_size_from_model(breast_primary_model, fallback=(160, 160))
-            breast_img = _preprocess_image(contents, target_size=breast_target_size)
+            breast_img = _preprocess_image(contents, target_size=breast_target_size, preprocess_mode="resnet50")
             breast_raw_prob, model_probs = _ensemble_breast_prediction(breast_models, breast_img)
             breast_prob = _calibrate_breast_probability(breast_raw_prob)
-            breast_prediction, breast_diagnosis = _breast_labels(breast_prob)
+            breast_threshold = float(breast_art.get("metadata", {}).get("decision_threshold", BREAST_CANCER_THRESHOLD))
+            breast_prediction, breast_diagnosis = _breast_labels(breast_prob, threshold=breast_threshold)
             
             model_results["breast"] = {
                 "status": "success",
@@ -1573,7 +1947,7 @@ async def predict_unified(
                 "raw_probability": round(breast_raw_prob, 4),
                 "positive_probability": round(breast_prob, 4),
                 "selection_score": round(breast_prob, 4),
-                "threshold": BREAST_CANCER_THRESHOLD,
+                "threshold": breast_threshold,
                 "ensemble_models": model_probs,
             }
         except Exception as exc:

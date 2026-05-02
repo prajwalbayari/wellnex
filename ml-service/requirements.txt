@@ -13,3 +13,4 @@ xgboost>=2.0.0
 catboost>=1.2.0
 pandas>=2.2.0
 pypdf>=4.2.0
+PyMuPDF>=1.22.3
