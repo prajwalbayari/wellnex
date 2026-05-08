@@ -47,7 +47,7 @@ const Landing = () => {
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-tight">
               Data-Driven
               <br />
-              <span className="text-primary-200">Multi-Disease</span>
+              <span className="text-primary-200">Disease</span>
               <br />
               Prediction Platform
             </h1>
