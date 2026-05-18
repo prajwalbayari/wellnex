@@ -27,7 +27,6 @@ export const predictImage = async (diseaseType, imageFile) => {
   formData.append("image", imageFile);
 
   const { data } = await api.post("/predictions/image", formData, {
-    headers: { "Content-Type": "multipart/form-data" },
   });
   return data;
 };
@@ -43,7 +42,7 @@ export const predictUnified = async (file, supplementalData = {}) => {
   formData.append("supplementalData", JSON.stringify(supplementalData));
 
   const { data } = await api.post("/predictions/unified", formData, {
-    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000,
   });
   return data;
 };

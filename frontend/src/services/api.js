@@ -4,7 +4,7 @@
 import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 20000);
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 120000);
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
@@ -32,6 +32,17 @@ const readStoredUser = () => {
 // ── Request Interceptor – attach JWT ─────────────────────────
 api.interceptors.request.use(
   (config) => {
+    const isFormData = typeof FormData !== "undefined" && config.data instanceof FormData;
+    if (isFormData && config.headers) {
+      if (typeof config.headers.delete === "function") {
+        config.headers.delete("Content-Type");
+        config.headers.delete("content-type");
+      } else {
+        delete config.headers["Content-Type"];
+        delete config.headers["content-type"];
+      }
+    }
+
     const stored = readStoredUser();
     if (stored) {
       const { token } = stored;

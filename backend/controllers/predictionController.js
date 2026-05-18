@@ -12,6 +12,7 @@ import { uploadToCloudinary } from "../config/cloudinary.js";
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8001";
 // If ML_SERVICE_TIMEOUT_MS is set to 0, timeout will be disabled (no timeout).
 const ML_TIMEOUT_MS = Number(process.env.ML_SERVICE_TIMEOUT_MS ?? 20000);
+const ML_REPORT_TIMEOUT_MS = Number(process.env.ML_REPORT_TIMEOUT_MS ?? 120000);
 const SUPPORTED_DISEASES = ["diabetes", "heart", "breast"];
 
 const _firstDetail = (detail) => {
@@ -219,7 +220,7 @@ export const predictUnified = asyncHandler(async (req, res) => {
       headers: form.getHeaders(),
       maxBodyLength: Infinity,
     };
-    if (ML_TIMEOUT_MS > 0) axiosConfig.timeout = ML_TIMEOUT_MS;
+    if (ML_REPORT_TIMEOUT_MS > 0) axiosConfig.timeout = ML_REPORT_TIMEOUT_MS;
 
     mlResponse = await axios.post(`${ML_URL}/predict/unified`, form, axiosConfig);
   } catch (err) {
